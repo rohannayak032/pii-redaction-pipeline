@@ -1,0 +1,16 @@
+# Draft starting list. Edit your own section and tell the group if you add something.
+# Install with: pip install -r requirements.txt   (Python 3.12)
+
+# Everyone
+pytest
+
+# Extraction
+python-docx
+python-pptx
+pymupdf
+pytesseract
+pillow
+
+# Detection
+spacy
+faker
