@@ -218,3 +218,11 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# CONFIDENTIAL: never commit Cadence/Optiv sample files or derived data
+data/
+*.pdf
+*.docx
+*.pptx
+*.xlsx
+*.zip
