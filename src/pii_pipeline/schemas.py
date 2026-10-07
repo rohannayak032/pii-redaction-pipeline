@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -20,12 +20,14 @@ class Entity:
     block_index: int           # the `index` of the TextBlock it was found in
     # start and end count characters from the start of THAT block's text.
     # start is included, end is not (same as Python slicing: text[start:end]).
+    # They refer to the ORIGINAL text, not the redacted text.
     start: int
     end: int
     pii_type: str              # e.g. "EMAIL", "PERSON", "PHONE"
     confidence: float          # 0.0 to 1.0
     detector: str              # which method found it, e.g. "regex", "spacy"
-    value: str                 # the actual PII text. SECRET: never show or log it
+    value: str = field(repr=False)   # the actual PII text. SECRET: never show or log it
+    placeholder: str | None = None   # filled in by redaction, e.g. "[EMAIL_2]"
 
     def public_info(self) -> dict:
         """Safe to show on screen or in a report: everything except `value`."""
@@ -37,6 +39,7 @@ class Entity:
             "pii_type": self.pii_type,
             "confidence": self.confidence,
             "detector": self.detector,
+            "placeholder": self.placeholder,
         }
 
 
