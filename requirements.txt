@@ -13,5 +13,6 @@ pillow
 
 # Detection
 spacy
+presidio-analyzer
 faker
 phonenumbers
