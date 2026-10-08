@@ -17,20 +17,6 @@ EMAIL = re.compile(
 )
 
 
-# List of regex-based PII detectors.
-#
-# Each entry contains:
-#   1. The regex pattern
-#   2. The type of PII it detects
-#   3. Confidence assigned to the detection
-#   4. Name of the detector used
-#
-# This makes it easy to add more regex-based PII types later.
-PATTERNS = [
-    (EMAIL, "EMAIL", 0.9, "regex.email"),
-]
-
-
 # =========================================================
 # PHONE NUMBER DETECTION
 # =========================================================
@@ -161,3 +147,32 @@ def find_patterns(block: TextBlock) -> list[Entity]:
 
     # Return all detected PII from this text block.
     return found
+
+# Employee IDs follow the observed format:
+# EMP- followed by exactly 5 digits.
+#
+# Parentheses may optionally surround the entire ID:
+#   EMP-37655
+#   (EMP-37655)
+EMPLOYEE_ID = re.compile(
+    r"(?<![A-Za-z0-9])"  # Make sure the ID is not immediately preceded by a letter or digit.
+    r"\(?"              # Optionally match an opening parenthesis '('.
+    r"EMP-"             # Require the literal prefix 'EMP-'.
+    r"\d{5}"            # Require exactly 5 digits after 'EMP-'.
+    r"\)?"              # Optionally match a closing parenthesis ')'.
+    r"(?![A-Za-z0-9])"  # Make sure the ID is not immediately followed by a letter or digit.
+)
+
+# List of regex-based PII detectors.
+#
+# Each entry contains:
+#   1. The regex pattern
+#   2. The type of PII it detects
+#   3. Confidence assigned to the detection
+#   4. Name of the detector used
+#
+# This makes it easy to add more regex-based PII types later.
+PATTERNS = [
+    (EMAIL, "EMAIL", 0.9, "regex.email"),
+    (EMPLOYEE_ID, "EMPLOYEE_ID", 0.95, "regex.employee_id"),
+]

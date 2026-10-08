@@ -180,3 +180,68 @@ def test_does_not_detect_date_as_phone():
 
     # The date should produce zero phone detections.
     assert phones == []
+
+# =========================================================
+# EMPLOYEE ID DETECTION TESTS
+# =========================================================
+
+@pytest.mark.parametrize("employee_id", [
+    "EMP-37655",       # Standard employee ID format.
+    "EMP-38104",       # Another standard employee ID.
+    "(EMP-37655)",     # Employee ID surrounded by parentheses.
+])
+def test_employee_id_formats(employee_id):
+    """
+    Test that employee IDs in all observed formats
+    are correctly detected.
+    """
+
+    # Put the test employee ID inside normal document text.
+    # This simulates how it may appear in a real document.
+    block = make(f"Employee ID: {employee_id}")
+
+    # Run the complete PII detection pipeline on the text block.
+    entities = detect([block])
+
+    # Keep only entities classified as EMPLOYEE_ID.
+    #
+    # This is useful because the detector may eventually
+    # identify multiple different types of PII in the same text.
+    employee_ids = [
+        e for e in entities
+        if e.pii_type == "EMPLOYEE_ID"
+    ]
+
+    # Exactly one employee ID should have been detected.
+    assert len(employee_ids) == 1
+
+    # Verify that the detector preserved the exact text
+    # that appeared in the document.
+    assert employee_ids[0].value == employee_id
+    
+# =========================================================
+# EMPLOYEE ID FALSE-POSITIVE TESTS
+# =========================================================
+
+@pytest.mark.parametrize("text", [
+    "EMP-1234",       # Only 4 digits — invalid format.
+    "EMP-123456",     # 6 digits — invalid format.
+    "XEMP-37655ABC",  # Employee ID is embedded in another identifier.
+])
+def test_invalid_employee_id_not_detected(text):
+    """
+    Test that strings which do not follow the observed
+    employee ID format are not incorrectly detected.
+    """
+
+    # Run the PII detector on the invalid input.
+    entities = detect([make(text)])
+
+    # Keep only entities classified as EMPLOYEE_ID.
+    employee_ids = [
+        e for e in entities
+        if e.pii_type == "EMPLOYEE_ID"
+    ]
+
+    # No employee ID should be detected.
+    assert employee_ids == []
