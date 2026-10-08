@@ -14,7 +14,7 @@ from pptx.enum.shapes import PP_PLACEHOLDER
 
 from ..base import Context, RawBlock
 from ..metadata import ooxml_properties
-from ..ooxml import Consumed, count_embedded, drawingml_text, part_name, sweep
+from ..ooxml import Consumed, count_embedded, drawingml_text, link_sweep, part_name, sweep
 from ..validation import UNSUPPORTED_OBJECT
 from .comments import author_names, comment_blocks
 from .masters import template_blocks
@@ -67,6 +67,7 @@ def extract_pptx(path: Path, ctx: Context) -> list[RawBlock]:
         ctx.warn(UNSUPPORTED_OBJECT, "document", f"{embedded} embedded object(s)/file(s) not extracted")
 
     blocks += sweep(package.iter_parts(), consumed, ctx, prefixes=("ppt/",))
+    blocks += link_sweep(package.iter_parts(), blocks, prefixes=("ppt/",))
     properties = ooxml_properties(package)
     if properties is not None:
         blocks.append(properties)

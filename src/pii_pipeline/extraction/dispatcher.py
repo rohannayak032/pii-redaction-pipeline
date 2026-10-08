@@ -13,6 +13,10 @@ from .base import Context, UnsupportedFileError
 from .validation import EXTENSION_MISMATCH
 
 _OLE2 = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+# Declared sizes are checked before anything is inflated; zipfile itself stops
+# reading a member at its declared size, so a lying header cannot exceed these.
+MAX_ZIP_ENTRIES = 10_000
+MAX_UNZIPPED_BYTES = 1024 * 2**20
 _EXTENSIONS = {"pdf": {".pdf"}, "docx": {".docx", ".docm", ".dotx"}, "pptx": {".pptx", ".pptm", ".potx"}}
 
 
@@ -35,9 +39,12 @@ def detect_format(path: Path, ctx: Context) -> str | None:
     elif head.startswith(b"PK"):
         try:
             with zipfile.ZipFile(path) as package:
-                names = set(package.namelist())
+                infos = package.infolist()
         except zipfile.BadZipFile:
             raise UnsupportedFileError(f"{path.name!r} is a damaged ZIP/Office file.") from None
+        if len(infos) > MAX_ZIP_ENTRIES or sum(i.file_size for i in infos) > MAX_UNZIPPED_BYTES:
+            raise UnsupportedFileError(f"{path.name!r} expands to an unsafe size (possible ZIP bomb).")
+        names = {i.filename for i in infos}
         if "word/document.xml" in names:
             fmt = "docx"
         elif "ppt/presentation.xml" in names:

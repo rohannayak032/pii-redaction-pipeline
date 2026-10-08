@@ -5,8 +5,8 @@ so that detection sees which column every value belongs to. Without a
 detected header the row is ``"EMP-00001 | Jane Roe | …"``.
 
 The header row itself is not emitted separately: its text appears as labels in
-every data row. If header detection is wrong, that text is still extracted
-(repeated in each row), so recall is never lost.
+every data row. Header cells over a column with no data are emitted as one
+``header`` block, so recall is never lost.
 """
 
 from __future__ import annotations
@@ -116,6 +116,14 @@ def table_blocks(
         n_header = choose_header_rows(rows, flagged_header_rows)
         labels = header_labels(rows[:n_header])
     blocks: list[RawBlock] = []
+    # Header cells whose column has no data never appear as a label: emit them as-is.
+    used = {c.col for row in rows[n_header:] for c in row if clean(c.text) or c.words}
+    orphans = [c for row in rows[:n_header] for c in row if clean(c.text) and c.col not in used]
+    if orphans:
+        blocks.append(RawBlock(
+            kind="table_row", location=f"{location}, header", pieces=row_pieces(orphans, {}),
+            table_id=table_id, row_index=1, **common,
+        ))
     for r, row in enumerate(rows[n_header:], start=n_header + 1):
         pieces = row_pieces(row, labels)
         if not pieces:

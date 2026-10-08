@@ -13,7 +13,7 @@ from lxml import etree
 
 from ..base import Context, Piece, RawBlock
 from ..normalize import clean
-from ..ooxml import Consumed, NS, part_name, q, rels, xp
+from ..ooxml import Consumed, NS, link_address, part_name, q, rels, xp
 from ..tables import Cell, table_blocks
 from .drawings import Counters, drawing_blocks
 from .text import DRAWINGS, NESTED_TABLES, collect
@@ -77,7 +77,7 @@ class BodyWalker:
             targets += _FIELD_URL.findall(instr.text or "")
         blocks, visible = [], text.lower()
         for target in dict.fromkeys(clean(t) for t in targets):
-            bare = target.split(":", 1)[1] if target.lower().startswith(("mailto:", "tel:")) else target
+            bare = link_address(target)
             if bare and bare.lower() not in visible:
                 blocks.append(RawBlock(
                     kind="link", location=f"{location}, link {len(blocks) + 1}", source="xml",

@@ -141,6 +141,38 @@ def sweep(parts: Iterable, consumed: Consumed, ctx: Context, prefixes: tuple[str
     return blocks
 
 
+def link_address(target: str) -> str:
+    """The part of a link target a reader would see (``mailto:a@b`` -> ``a@b``)."""
+    return target.split(":", 1)[1] if target.lower().startswith(("mailto:", "tel:")) else target
+
+
+def link_sweep(parts: Iterable, blocks: list[RawBlock], prefixes: tuple[str, ...]) -> list[RawBlock]:
+    """External hyperlink targets whose address appears in no extracted block.
+
+    Covers links the structured extractors do not read (PPTX runs and shapes,
+    DOCX table cells, notes, comments, text boxes). Targets live in ``.rels``
+    files, so the text sweep cannot see them.
+    """
+    seen = " ".join(p.text for b in blocks for p in b.pieces).lower()
+    out: list[RawBlock] = []
+    for part in parts:
+        name = part_name(part)
+        if not name.startswith(prefixes):
+            continue
+        for rel in list(rels(part).values()):
+            if not rel.is_external or not rel.reltype.endswith("/hyperlink"):
+                continue
+            target = clean(rel.target_ref)
+            address = link_address(target).lower()
+            if address and address not in seen:
+                seen += " " + address
+                out.append(RawBlock(
+                    kind="link", location=f"links ({name}), link {len(out) + 1}", source="xml",
+                    pieces=[Piece("Link target", kind="label"), Piece(": ", kind="sep"), Piece(target)],
+                ))
+    return out
+
+
 # --------------------------------------------------------------------------
 # Paragraph-like text collection for DrawingML (a:p / a:t)
 # --------------------------------------------------------------------------

@@ -22,6 +22,10 @@ from pii_pipeline.schemas import TextBlock
     ("ｊｏｅ＠ｅｘａｍｐｌｅ．ｔｅｓｔ", "joe@example.test"),           # fullwidth
     ("  a\n\tb  ", "a b"),
     ("co­operate", "cooperate"),                               # soft hyphen
+    ("ava‎@example.test", "ava@example.test"),            # left-to-right mark
+    ("ava⁣@example.test", "ava@example.test"),            # invisible separator
+    ("900-12‬-3456", "900-12-3456"),                      # pop directional formatting
+    ("900️-12-3456", "900-12-3456"),                      # variation selector
 ])
 def test_clean(raw, expected):
     assert clean(raw) == expected
@@ -63,7 +67,8 @@ def test_header_detection():
 
 def test_row_blocks_with_labels_and_exact_cell_spans():
     rows = [_row("Employee ID", "Name", "Email"), _row("EMP-00001", "", "a@x.test")]
-    [block] = table_blocks(rows, location="table 1", table_id=1)
+    header, block = table_blocks(rows, location="table 1", table_id=1)
+    assert render(header.pieces)[0] == "Name" and header.location == "table 1, header"   # column with no data
     text, cells, _ = render(block.pieces)
     assert text == "Employee ID: EMP-00001 | Email: a@x.test"
     assert [text[s:e] for _, s, e in cells] == ["EMP-00001", "a@x.test"]
@@ -98,3 +103,9 @@ def test_contract_violations_raise():
         check_contract([TextBlock("f.pdf", "page 1", 0, "text", 1.5)], [BlockMeta(index=0, kind="p", source="ocr")])
     with pytest.raises(ExtractionError):
         check_contract([good], [BlockMeta(index=0, kind="p", source="native", cells=((0, 2, 99),))])
+
+
+def test_flagged_header_over_empty_rows_is_not_lost():
+    rows = [_row("Jane Roe", "SSN 900-12-3456"), _row("", "")]
+    [block] = table_blocks(rows, location="table 1", table_id=1, flagged_header_rows=1)
+    assert render(block.pieces)[0] == "Jane Roe | SSN 900-12-3456"

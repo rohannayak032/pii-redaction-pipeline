@@ -111,3 +111,9 @@ def test_damaged_file_error_has_no_content(tmp_path):
         extract_document(broken)
     assert f.PERSON_BODY not in str(info.value)
     assert info.value.__cause__ is None and info.value.__suppress_context__
+
+
+def test_zip_bomb_is_refused_before_inflating(monkeypatch, files):
+    monkeypatch.setattr(extraction.dispatcher, "MAX_UNZIPPED_BYTES", 1000)
+    with pytest.raises(UnsupportedFileError, match="unsafe size"):
+        extract_document(files["docx"])

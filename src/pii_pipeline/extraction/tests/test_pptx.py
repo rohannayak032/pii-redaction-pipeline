@@ -75,3 +75,17 @@ def test_no_false_embedded_object_warning_for_charts(extracted):
 def test_deterministic(files, extracted):
     again = extract_document_detailed(files["pptx"])
     assert [(b.location, b.text) for b in again.blocks] == [(b.location, b.text) for b in extracted("pptx").blocks]
+
+
+def test_hyperlink_target_hidden_behind_text(tmp_path):
+    from pptx import Presentation
+    from pptx.util import Inches
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    run = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(4), Inches(1)).text_frame.paragraphs[0].add_run()
+    run.text = "Contact"
+    run.hyperlink.address = f"mailto:{f.EMAIL_BODY}"
+    path = tmp_path / "link.pptx"
+    prs.save(path)
+    r = extract_document_detailed(path)
+    assert any(b.text == f"Link target: mailto:{f.EMAIL_BODY}" for b in r.blocks)

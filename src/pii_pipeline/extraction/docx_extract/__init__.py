@@ -13,7 +13,7 @@ import docx
 
 from ..base import Context, RawBlock
 from ..metadata import ooxml_properties
-from ..ooxml import Consumed, count_embedded, sweep
+from ..ooxml import Consumed, count_embedded, link_sweep, sweep
 from ..validation import UNSUPPORTED_OBJECT
 from .body import BodyWalker
 from .drawings import Counters
@@ -46,6 +46,7 @@ def extract_docx(path: Path, ctx: Context) -> list[RawBlock]:
         ctx.warn(UNSUPPORTED_OBJECT, "document", f"{embedded} embedded object(s)/file(s) not extracted")
 
     blocks += sweep(package.iter_parts(), consumed, ctx, prefixes=("word/",))
+    blocks += link_sweep(package.iter_parts(), blocks, prefixes=("word/",))
     properties = ooxml_properties(package)
     if properties is not None:
         blocks.append(properties)

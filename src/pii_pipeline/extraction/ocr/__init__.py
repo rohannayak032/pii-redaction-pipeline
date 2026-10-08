@@ -32,6 +32,7 @@ __all__ = ["OcrOutput", "load_image", "ocr_available", "ocr_blob", "ocr_image", 
 
 BLANK_INK_RATIO = 0.001
 MIN_IMAGE_PX = 50
+MAX_PIXELS = 40_000_000   # upscaling never grows an image past this
 
 
 @dataclass
@@ -106,7 +107,7 @@ def ocr_image(
     gray = preprocessing.rotate_quadrant(gray, out.rotation)
     out.skew = preprocessing.skew_angle(gray)
     gray = preprocessing.deskew(gray, out.skew)
-    scale = preprocessing.upscale_factor(gray)
+    scale = min(preprocessing.upscale_factor(gray), max(1.0, (MAX_PIXELS / gray.size) ** 0.5))
     if scale > 1.0:
         gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
     gray = preprocessing.enhance(gray)

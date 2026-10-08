@@ -140,7 +140,8 @@ Employee ID: EMP-00101 | Name: Ava Stone | Department: Finance
 
 * Header found from the file when possible (DOCX `w:tblHeader`, PPTX
   `firstRow`, PDF external header), else the first row if it is short,
-  distinct, has no digits or `@`. The header row is not emitted separately.
+  distinct, has no digits or `@`. The header row is not emitted separately;
+  header cells over a column with no data form one `header` block.
 * Empty cells are omitted; merged cells counted once; nested tables become
   their own rows (`table 1, row 3, nested table 1, row 2`).
 * `BlockMeta.cells` gives the exact span of each cell value, and
@@ -176,7 +177,7 @@ word confidence, and `BlockMeta.words` has per-word confidence and boxes.
 |---|---|
 | PDF | text outside the crop box, invisible OCR layers, annotations/comments (+ author), form-field values, link targets not shown on the page, info-dictionary properties; embedded attachments are flagged |
 | DOCX | insertions, content controls, fields, hyperlinks, link targets, text boxes (DrawingML and VML, no duplicate from `mc:Fallback`), images (OCR + alt text), charts, SmartArt, headers/footers for every section (default / first page / even), footnotes, endnotes, comments (+ author), core + app properties |
-| PPTX | groups (recursive), placeholders, tables, pictures (OCR + alt text), charts, SmartArt, footer placeholders, speaker notes and other notes-page text, legacy and modern comments (+ author), hidden slides (marked), master/layout/notes-master text, core + app properties |
+| PPTX | groups (recursive), placeholders, tables, pictures (OCR + alt text), charts, SmartArt, footer placeholders, speaker notes and other notes-page text, legacy and modern comments (+ author), hidden slides (marked), master/layout/notes-master text, link targets, core + app properties |
 | DOCX + PPTX | **safety-net sweep**: every text node (`w:t`, `a:t`) in the package that no extractor used is emitted as `other text (<part>)` with an `UNCLAIMED_TEXT` warning |
 
 Deleted tracked-change text is not extracted, because it is not part of the
@@ -204,7 +205,7 @@ document's content.
 * Values inside a chart's embedded workbook that the chart does not display are not read.
 * OCR boxes are exact on upright images; after rotation/deskew they refer to the corrected image.
 * Handwriting and very low-quality scans depend on Tesseract and may need a human check (see the warnings).
-* Text normalization folds look-alike characters (dashes, fullwidth, zero-width) but does not fix OCR errors.
+* Text normalization folds look-alike characters (dashes, fullwidth) and removes invisible ones (zero-width, bidi marks, variation selectors) but does not fix OCR errors.
 
 ### 4.8 Tests
 

@@ -19,6 +19,7 @@ import pytesseract
 from ..base import BBox, OCRUnavailableError
 
 LANG = os.environ.get("PII_OCR_LANG", "eng")
+TIMEOUT_S = 300   # per Tesseract call; a hang becomes an ExtractionError instead
 _WINDOWS_DEFAULT = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
 
@@ -59,7 +60,7 @@ def ocr_words(image: np.ndarray, psm: int = 3) -> list[Word]:
     """Run Tesseract on a grayscale/binary uint8 image and return its words."""
     _configure()
     config = f"--oem 1 --psm {psm} -c preserve_interword_spaces=1"
-    data = pytesseract.image_to_data(image, lang=LANG, config=config, output_type=pytesseract.Output.DICT)
+    data = pytesseract.image_to_data(image, lang=LANG, config=config, output_type=pytesseract.Output.DICT, timeout=TIMEOUT_S)
     words: list[Word] = []
     for i, level in enumerate(data["level"]):
         if int(level) != 5:
@@ -89,7 +90,7 @@ def detect_orientation(image: np.ndarray) -> int:
     """
     _configure()
     try:
-        osd = pytesseract.image_to_osd(image, config="--psm 0", output_type=pytesseract.Output.DICT)
+        osd = pytesseract.image_to_osd(image, config="--psm 0", output_type=pytesseract.Output.DICT, timeout=TIMEOUT_S)
     except pytesseract.TesseractError:
         return 0
     if float(osd.get("orientation_conf", 0)) < 1.0:

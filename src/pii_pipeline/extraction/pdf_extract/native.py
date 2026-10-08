@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import pymupdf
 
 from ..base import BBox, Context, Piece, RawBlock
@@ -15,8 +17,15 @@ from ..tables import Cell, table_blocks
 TEXT_FLAGS = pymupdf.TEXTFLAGS_WORDS & ~pymupdf.TEXT_MEDIABOX_CLIP
 MIN_IMAGE_PX = 50
 OCR_DPI = 300
+MAX_PIXELS = 40_000_000
 
 Word = tuple  # (x0, y0, x1, y1, text, block_no, line_no, word_no)
+
+
+def capped_dpi(rect: pymupdf.Rect, dpi: int) -> int:
+    """``dpi``, lowered so that rendering ``rect`` stays under MAX_PIXELS."""
+    area = (rect.width / 72.0) * (rect.height / 72.0)
+    return dpi if area <= 0 else int(min(dpi, math.sqrt(MAX_PIXELS / area)))
 
 
 def page_words(page: pymupdf.Page) -> list[Word]:
@@ -97,11 +106,12 @@ def _image_ocr(
             continue
         number = len(out) + 1
         location = f"page {pno}, image {number}"
-        pix = page.get_pixmap(dpi=OCR_DPI, clip=rect, colorspace=pymupdf.csGRAY)
+        dpi = capped_dpi(rect, OCR_DPI)
+        pix = page.get_pixmap(dpi=dpi, clip=rect, colorspace=pymupdf.csGRAY)
         result = ocr_image(pixmap_array(pix), ctx, location, page=pno)
         blocks = result.blocks
         if result.geometry_exact and page.rotation == 0:
-            blocks = [_to_points(b, rect) for b in blocks]
+            blocks = [_to_points(b, rect, dpi) for b in blocks]
             blocks = [b for b in blocks if not _mostly_duplicate(b, word_boxes)]
         if blocks:
             out.append((tuple(rect), blocks))
@@ -114,9 +124,9 @@ def pixmap_array(pix: pymupdf.Pixmap):
     return array[:, : pix.width * pix.n].reshape(pix.height, pix.width, pix.n).squeeze()
 
 
-def _to_points(block: RawBlock, clip: pymupdf.Rect) -> RawBlock:
-    """Map OCR pixel boxes (of a clip rendered at OCR_DPI) to page points."""
-    factor = 72.0 / OCR_DPI
+def _to_points(block: RawBlock, clip: pymupdf.Rect, dpi: int) -> RawBlock:
+    """Map OCR pixel boxes (of a clip rendered at ``dpi``) to page points."""
+    factor = 72.0 / dpi
 
     def convert(b: BBox | None) -> BBox | None:
         if b is None:

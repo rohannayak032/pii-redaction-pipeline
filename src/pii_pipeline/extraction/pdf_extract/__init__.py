@@ -8,7 +8,6 @@
 
 from __future__ import annotations
 
-import math
 from pathlib import Path
 
 import pymupdf
@@ -18,10 +17,9 @@ from ..ocr import BLANK_INK_RATIO, ocr_image
 from ..metadata import pdf_properties
 from ..validation import PAGE_NO_TEXT, UNSUPPORTED_OBJECT
 from .annotations import annotation_blocks, form_field_blocks, link_blocks
-from .native import pixmap_array, has_text_layer, native_page, page_words
+from .native import capped_dpi, pixmap_array, has_text_layer, native_page, page_words
 
 SCAN_DPI = 300
-MAX_PIXELS = 40_000_000
 
 # MuPDF messages go to stderr; keep them quiet (they are structural, but the
 # module rule is that nothing about a document is printed).
@@ -31,15 +29,8 @@ if hasattr(pymupdf, "no_recommend_layout"):
     pymupdf.no_recommend_layout()
 
 
-def _scan_dpi(page: pymupdf.Page) -> int:
-    w, h = page.rect.width / 72.0, page.rect.height / 72.0
-    if w <= 0 or h <= 0:
-        return SCAN_DPI
-    return int(min(SCAN_DPI, math.sqrt(MAX_PIXELS / (w * h))))
-
-
 def scanned_page(page: pymupdf.Page, pno: int, ctx: Context) -> tuple[list[RawBlock], float]:
-    pix = page.get_pixmap(dpi=_scan_dpi(page), colorspace=pymupdf.csGRAY)
+    pix = page.get_pixmap(dpi=capped_dpi(page.rect, SCAN_DPI), colorspace=pymupdf.csGRAY)
     result = ocr_image(pixmap_array(pix), ctx, f"page {pno}", page=pno, check_coverage=True)
     return result.blocks, result.ink
 
