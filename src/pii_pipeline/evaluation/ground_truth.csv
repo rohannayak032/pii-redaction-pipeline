@@ -1,0 +1,103 @@
+file,case_id,type,value,location,start,end
+TC01_basic.docx,TC01,NAME,Rahul Sharma,paragraph,8,20
+TC01_basic.docx,TC01,EMAIL,rahul.sharma@example.com,paragraph,24,48
+TC02_basic.pdf,TC02,PHONE,+91 98765 43210,page 1,11,26
+TC03_basic.pptx,TC03,AADHAAR,2345 6789 0123,slide 2 body,9,23
+TC04_basic.docx,TC04,PAN,ABCDE1234F,paragraph,12,22
+TC05_basic.pdf,TC05,CARD,4111 1111 1111 1111,page 1,6,25
+TC06_basic.docx,TC06,DOB,14/03/2001,paragraph,5,15
+TC07_basic.pdf,TC07,ADDRESS,"Flat 402, Lotus Residency, MG Road, Bengaluru 560001",page 1,9,61
+TC08_basic.docx,TC08,PASSPORT,K1234567,paragraph,13,21
+TC09_basic.pptx,TC09,IP,192.168.10.45,slide 3,22,35
+TC10_basic.pdf,TC10,ACCOUNT,123456789012,page 2,9,21
+TC10_basic.pdf,TC10,IFSC,HDFC0001234,page 2,28,39
+TC11_format_variation.docx,TC11,PHONE,98765-43210,paragraph,7,18
+TC12_format_variation.docx,TC12,PHONE,9876543210,paragraph,13,23
+TC13_format_variation.pdf,TC13,PHONE,98765 43210,page 1,10,21
+TC14_format_variation.docx,TC14,AADHAAR,234567890123,paragraph,8,20
+TC15_format_variation.docx,TC15,AADHAAR,2345-6789-0123,paragraph,8,22
+TC16_format_variation.pdf,TC16,CARD,4111-1111-1111-1111,page 1,5,24
+TC17_format_variation.docx,TC17,CARD,5555555555554444,paragraph,5,21
+TC18_format_variation.docx,TC18,EMAIL,john [at] mail [dot] com,paragraph,7,31
+TC19_format_variation.docx,TC19,EMAIL,priya.k+work@sub.mail.co.in,paragraph,7,34
+TC20_format_variation.pdf,TC20,DOB,14 March 2001,page 1,5,18
+TC21_format_variation.pdf,TC21,DOB,2001-03-14,page 1,8,18
+TC22_format_variation.docx,TC22,PAN,abcde1234f,paragraph,5,15
+TC23_structure.docx,TC23,NAME,Anita Rao,table cell,19,28
+TC23_structure.docx,TC23,PHONE,91234 56780,table cell,31,42
+TC24_structure.docx,TC24,NAME,Vikram Singh,header,28,40
+TC25_structure.docx,TC25,EMAIL,hr@example.org,footer,9,23
+TC25_structure.docx,TC25,PHONE,080-2345-6789,footer,26,39
+TC26_structure.pptx,TC26,NAME,Meera Iyer,speaker notes,7,17
+TC26_structure.pptx,TC26,PAN,FGHIJ5678K,speaker notes,34,44
+TC27_structure.pptx,TC27,NAME,Kiran,text box,6,11
+TC27_structure.pptx,TC27,EMAIL,kiran.t@example.com,text box,15,34
+TC28_structure.pptx,TC28,NAME,Suresh Babu,slide table,5,16
+TC28_structure.pptx,TC28,CARD,4111 1111 1111 1111,slide table,19,38
+TC29_structure.docx,TC29,NAME,Lakshmi Narayan,footnote,23,38
+TC29_structure.docx,TC29,PHONE,99887 76655,footnote,40,51
+TC30_structure.pdf,TC30,NONE,,two-column page,,
+TC31_structure.pdf,TC31,PHONE,"98765
+43210",line break,7,18
+TC32_structure.pdf,TC32,AADHAAR,2345 6789 0123,page break,,
+TC33_structure.pdf,TC33,NAME,Deepak Verma,scanned image page,21,33
+TC33_structure.pdf,TC33,PAN,KLMNO9012P,scanned image page,39,49
+TC34_structure.docx,TC34,EMAIL,support@example.com,hyperlink,40,59
+TC35_false_positive.docx,TC35,NONE,,paragraph,,
+TC36_false_positive.pdf,TC36,NONE,,page 1,,
+TC37_false_positive.docx,TC37,NONE,,paragraph,,
+TC38_false_positive.pptx,TC38,NONE,,slide 1,,
+TC39_false_positive.docx,TC39,NONE,,paragraph,,
+TC40_false_positive.pdf,TC40,NONE,,page 1,,
+TC41_false_positive.docx,TC41,EMAIL,info@company.com,paragraph,4,20
+TC41_false_positive.docx,TC41,EMAIL,user@example.com,paragraph,54,70
+TC42_false_positive.pptx,TC42,NONE,,slide 4,,
+TC43_false_positive.docx,TC43,NONE,,paragraph,,
+TC44_false_positive.pdf,TC44,NONE,,page 1,,
+TC45_false_positive.docx,TC45,NONE,,whole file,,
+TC46_negative_luhn.docx,TC46,NONE,,paragraph,,
+TC47_negative_verhoeff.docx,TC47,NONE,,paragraph,,
+TC48_contextual.docx,TC48,NAME,Rahul,paragraph,0,5
+TC48_contextual.docx,TC48,NAME,Priya,paragraph,11,16
+TC48_contextual.docx,TC48,NAME,Sandeep,paragraph,22,29
+TC49_contextual.docx,TC49,ADDRESS,"12/B, Gandhi Nagar, near the temple, Vellore",paragraph,33,77
+TC50_contextual.pdf,TC50,PHONE,nine eight seven six five four three two one zero,page 1,13,62
+TC51_contextual.docx,TC51,NAME,A. Kumar,paragraph,4,12
+TC52_contextual.docx,TC52,NAME,मोहन लाल,paragraph,9,17
+TC52_contextual.docx,TC52,PHONE,98765 43210,paragraph,23,34
+TC53_repeat.docx,TC53,NAME,Rahul Sharma,paragraph x3,0,12
+TC53_repeat.docx,TC53,EMAIL,rahul.sharma@example.com,paragraph x3,21,45
+TC53_repeat.docx,TC53,NAME,Rahul Sharma,paragraph x3,54,66
+TC53_repeat.docx,TC53,NAME,R. Sharma,paragraph x3,75,84
+TC53_repeat.docx,TC53,EMAIL,rahul.sharma@example.com,paragraph x3,96,120
+TC54_dense.pdf,TC54,NAME,Neha Gupta,page 1,6,16
+TC54_dense.pdf,TC54,DOB,05/11/1998,page 1,22,32
+TC54_dense.pdf,TC54,AADHAAR,3456 7890 1234,page 1,42,56
+TC54_dense.pdf,TC54,PAN,PQRST3456U,page 1,62,72
+TC54_dense.pdf,TC54,PHONE,90123-45678,page 1,77,88
+TC54_dense.pdf,TC54,EMAIL,neha.g@example.com,page 1,90,108
+TC54_dense.pdf,TC54,CARD,4012 8888 8888 1881,page 1,115,134
+TC54_dense.pdf,TC54,ADDRESS,"7, Park Street, Kolkata 700016",page 1,142,172
+TC55_robustness.pdf,TC55,NONE,,whole file,,
+TC56_robustness.docx,TC56,NONE,,whole file,,
+TC57_robustness.pptx,TC57,NONE,,whole file,,
+TC58_robustness.pdf,TC58,NAME,Test Person10,page 10,,
+TC58_robustness.pdf,TC58,EMAIL,user10@example.com,page 10,,
+TC58_robustness.pdf,TC58,NAME,Test Person20,page 20,,
+TC58_robustness.pdf,TC58,EMAIL,user20@example.com,page 20,,
+TC58_robustness.pdf,TC58,NAME,Test Person30,page 30,,
+TC58_robustness.pdf,TC58,EMAIL,user30@example.com,page 30,,
+TC58_robustness.pdf,TC58,NAME,Test Person40,page 40,,
+TC58_robustness.pdf,TC58,EMAIL,user40@example.com,page 40,,
+TC58_robustness.pdf,TC58,NAME,Test Person50,page 50,,
+TC58_robustness.pdf,TC58,EMAIL,user50@example.com,page 50,,
+TC58_robustness.pdf,TC58,NAME,Test Person60,page 60,,
+TC58_robustness.pdf,TC58,EMAIL,user60@example.com,page 60,,
+TC58_robustness.pdf,TC58,NAME,Test Person70,page 70,,
+TC58_robustness.pdf,TC58,EMAIL,user70@example.com,page 70,,
+TC58_robustness.pdf,TC58,NAME,Test Person80,page 80,,
+TC58_robustness.pdf,TC58,EMAIL,user80@example.com,page 80,,
+TC58_robustness.pdf,TC58,NAME,Test Person90,page 90,,
+TC58_robustness.pdf,TC58,EMAIL,user90@example.com,page 90,,
+TC58_robustness.pdf,TC58,NAME,Test Person100,page 100,,
+TC58_robustness.pdf,TC58,EMAIL,user100@example.com,page 100,,
