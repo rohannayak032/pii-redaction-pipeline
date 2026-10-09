@@ -173,6 +173,13 @@ def detect_with_gliner(
             if block.text[start:end] != value:
                 continue
 
+            # Reject implausibly short person-name predictions.
+            # A single character is usually a false positive in this pipeline.
+            # Do not apply this rule to addresses.
+            if prediction["label"] == "person":
+                if len(value.strip()) < 2:
+                    continue
+
             # Convert the model's label to the pipeline's PII category.
             label = prediction["label"]
             pii_type = label_map.get(label)
