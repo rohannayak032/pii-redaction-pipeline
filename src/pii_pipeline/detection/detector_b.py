@@ -63,6 +63,19 @@ _LABELS = [
     "payment card number",
 ]
 
+# Generic role words that should not be treated as person names
+# when GLiNER predicts them as PERSON entities.
+_GENERIC_PERSON_TERMS = {
+    "approver",
+    "administrator",
+    "reviewer",
+    "user",
+    "users",
+    "owner",
+    "manager",
+    "stakeholder",
+    "stakeholders",
+}
 
 def _get_model():
     """
@@ -174,10 +187,15 @@ def detect_with_gliner(
                 continue
 
             # Reject implausibly short person-name predictions.
-            # A single character is usually a false positive in this pipeline.
             # Do not apply this rule to addresses.
             if prediction["label"] == "person":
-                if len(value.strip()) < 2:
+                normalized_value = value.strip().casefold()
+
+                if len(normalized_value) < 2:
+                    continue
+
+                # Generic role terms are not person names by themselves.
+                if normalized_value in _GENERIC_PERSON_TERMS:
                     continue
 
             # Convert the model's label to the pipeline's PII category.

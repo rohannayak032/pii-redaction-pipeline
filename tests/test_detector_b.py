@@ -110,3 +110,62 @@ def test_gliner_entity_metadata():
     # The source file and block index must be preserved for traceability.
     assert persons[0].file == "test.txt"
     assert persons[0].block_index == 0
+
+def test_gliner_filters_generic_person_role(monkeypatch):
+    """Do not classify a generic role word as a person."""
+    from pii_pipeline.detection import detector_b
+
+    class FakeModel:
+        def predict_entities(self, text, labels, threshold):
+            value = "approver"
+            start = text.index(value)
+            return [{
+                "text": value,
+                "start": start,
+                "end": start + len(value),
+                "label": "person",
+                "score": 0.95,
+            }]
+
+    monkeypatch.setattr(detector_b, "_get_model", lambda: FakeModel())
+
+    block = TextBlock(
+        file="test.txt",
+        location="paragraph 1",
+        index=0,
+        text="The approver reviews the request.",
+    )
+
+    entities = detector_b.detect_with_gliner([block])
+
+    assert not [e for e in entities if e.pii_type == "PERSON"]
+
+
+def test_gliner_keeps_address_predictions(monkeypatch):
+    """Filtering person-role words must not remove addresses."""
+    from pii_pipeline.detection import detector_b
+
+    class FakeModel:
+        def predict_entities(self, text, labels, threshold):
+            value = "221 Baker Street"
+            start = text.index(value)
+            return [{
+                "text": value,
+                "start": start,
+                "end": start + len(value),
+                "label": "address",
+                "score": 0.95,
+            }]
+
+    monkeypatch.setattr(detector_b, "_get_model", lambda: FakeModel())
+
+    block = TextBlock(
+        file="test.txt",
+        location="paragraph 1",
+        index=0,
+        text="Mail the letter to 221 Baker Street.",
+    )
+
+    entities = detector_b.detect_with_gliner([block])
+
+    assert any(e.pii_type == "ADDRESS" for e in entities)
