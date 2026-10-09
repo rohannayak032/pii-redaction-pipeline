@@ -169,3 +169,31 @@ def test_gliner_keeps_address_predictions(monkeypatch):
     entities = detector_b.detect_with_gliner([block])
 
     assert any(e.pii_type == "ADDRESS" for e in entities)
+
+
+def test_gliner_filters_email_address_phrase_as_address(monkeypatch):
+    """Do not treat the phrase 'email address' as a physical address."""
+    from pii_pipeline.detection import detector_b
+
+    class FakeModel:
+        def predict_entities(self, text, labels, threshold):
+            value = "email address"
+            start = text.index(value)
+            return [{
+                "text": value,
+                "start": start,
+                "end": start + len(value),
+                "label": "address",
+                "score": 0.95,
+            }]
+
+    monkeypatch.setattr(detector_b, "_get_model", lambda: FakeModel())
+
+    block = make("Search and add users by name or email address.")
+
+    entities = detector_b.detect_with_gliner([block])
+
+    assert not [
+        e for e in entities
+        if e.pii_type == "ADDRESS" and e.value == "email address"
+    ]

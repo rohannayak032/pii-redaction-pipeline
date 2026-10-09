@@ -186,6 +186,14 @@ def detect_with_gliner(
             if block.text[start:end] != value:
                 continue
 
+            # "Email address" is a contact-information label, not
+            # a physical address when predicted as an ADDRESS entity.
+            if (
+                prediction["label"] in {"address", "street address"}
+                and value.strip().casefold() == "email address"
+            ):
+                continue
+
             # Reject implausibly short person-name predictions.
             # Do not apply this rule to addresses.
             if prediction["label"] == "person":
