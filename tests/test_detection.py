@@ -399,3 +399,69 @@ def test_invalid_luhn_number_not_detected_as_payment_card():
     cards = [e for e in entities if e.pii_type == "PAYMENT_CARD"]
 
     assert cards == []
+
+
+# =========================================================
+# DIRECTOR ID TESTS
+# =========================================================
+
+@pytest.mark.parametrize("value", [
+    "DIR-0001",
+    "DIR-0012",
+])
+def test_director_id_formats(value):
+    block = make(f"Director ID: {value}")
+    entities = detect([block])
+    matches = [e for e in entities if e.pii_type == "DIRECTOR_ID"]
+
+    assert len(matches) == 1
+    assert matches[0].value == value
+    assert block.text[matches[0].start:matches[0].end] == value
+
+
+def test_invalid_director_id_not_detected():
+    entities = detect([make("DIR-12345")])
+    assert not any(e.pii_type == "DIRECTOR_ID" for e in entities)
+
+
+# =========================================================
+# VENDOR PERSONNEL ID TESTS
+# =========================================================
+
+@pytest.mark.parametrize("value", [
+    "MER-IN-1234",
+    "MER-PL-5678",
+])
+def test_vendor_personnel_id_formats(value):
+    block = make(f"Vendor personnel ID: {value}")
+    entities = detect([block])
+    matches = [e for e in entities if e.pii_type == "VENDOR_ID"]
+
+    assert len(matches) == 1
+    assert matches[0].value == value
+    assert block.text[matches[0].start:matches[0].end] == value
+
+
+def test_invalid_vendor_personnel_id_not_detected():
+    entities = detect([make("MER-IN-12345")])
+    assert not any(e.pii_type == "VENDOR_ID" for e in entities)
+
+
+# =========================================================
+# PESEL TESTS
+# =========================================================
+
+def test_labelled_pesel_detected_with_exact_offsets():
+    value = "44051401458"
+    block = make(f"PESEL: {value}")
+    entities = detect([block])
+    matches = [e for e in entities if e.pii_type == "PESEL"]
+
+    assert len(matches) == 1
+    assert matches[0].value == value
+    assert block.text[matches[0].start:matches[0].end] == value
+
+
+def test_unlabelled_eleven_digit_number_not_detected_as_pesel():
+    entities = detect([make("Reference number: 44051401458")])
+    assert not any(e.pii_type == "PESEL" for e in entities)
