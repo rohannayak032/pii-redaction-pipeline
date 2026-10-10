@@ -76,6 +76,31 @@ EMPLOYEE_ID = re.compile(
     r"(?![A-Za-z0-9])"
 )
 
+# =========================================================
+# DIRECTOR ID DETECTION
+# =========================================================
+
+# Match director IDs such as DIR-0001 and DIR-0012.
+DIRECTOR_ID = re.compile(
+    r"(?<![A-Za-z0-9])"
+    r"DIR-00\d{2}"
+    r"(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
+
+
+# =========================================================
+# VENDOR PERSONNEL ID DETECTION
+# =========================================================
+
+# Match vendor personnel IDs such as MER-IN-1234.
+# The two-letter country or region code can vary.
+VENDOR_PERSONNEL_ID = re.compile(
+    r"(?<![A-Za-z0-9])"
+    r"MER-[A-Z]{2}-\d{4}"
+    r"(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
 
 # =========================================================
 # SOCIAL SECURITY NUMBER (SSN) DETECTION
@@ -246,6 +271,39 @@ def find_phones(
 
     return found
 
+# =========================================================
+# POLISH PESEL DETECTION
+# =========================================================
+
+PESEL_CONTEXT = re.compile(
+    r"\bPESEL\b\s*[:#\-]?\s*(\d{11})\b",
+    re.IGNORECASE,
+)
+
+
+def find_pesels(block: TextBlock) -> list[Entity]:
+    """Find complete 11-digit PESEL values following a PESEL label."""
+
+    found = []
+
+    for match in PESEL_CONTEXT.finditer(block.text):
+        start, end = match.span(1)
+        value = match.group(1)
+
+        found.append(
+            Entity(
+                file=block.file,
+                block_index=block.index,
+                start=start,
+                end=end,
+                pii_type="PESEL",
+                confidence=0.95,
+                detector="regex.pesel",
+                value=value,
+            )
+        )
+
+    return found
 
 # =========================================================
 # DOB DETECTION
@@ -337,6 +395,8 @@ PATTERNS = [
     (SSN, "SSN", 0.95, "regex.ssn"),
     (PAN, "PAN", 0.95, "regex.pan"),
     (PASSPORT, "PASSPORT", 0.95, "regex.passport"),
+    (DIRECTOR_ID, "DIRECTOR_ID", 0.95, "regex.director_id"),
+    (VENDOR_PERSONNEL_ID, "VENDOR_ID", 0.95, "regex.vendor_personnel_id"),
 ]
 
 
@@ -428,5 +488,7 @@ def find_patterns(block: TextBlock) -> list[Entity]:
 
     # Add NLP-based person-name candidates from Presidio.
     found.extend(find_persons(block))
+
+    found.extend(find_pesels(block))
 
     return found

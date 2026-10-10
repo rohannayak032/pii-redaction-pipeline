@@ -1,25 +1,19 @@
+
 """
 GLiNER-based supplementary PII detector.
 
-This module uses GLiNER, a named-entity recognition model, to identify
-potential PII entities that may be missed by rule-based detection.
-
-The detector currently focuses on:
-- Person names
-- Addresses
-- Street addresses
-
-GLiNER predictions are treated as candidates, not guaranteed truths.
-The integration checks confidence thresholds and character offsets
-before converting predictions into the pipeline's Entity format.
+Detects candidate person names and addresses that may be missed by
+rule-based detection. Predictions are validated before being converted
+into the pipeline's Entity format.
 
 Limitations:
 - Predictions may contain false positives or miss real PII.
-- A confidence score is not necessarily a calibrated probability.
-- The model may return spans that include contextual labels.
-- Address components may be detected separately rather than as one
-  complete address.
+- Confidence scores are not necessarily calibrated probabilities.
+- Address components may be detected separately.
+- Word-based chunks do not guarantee a strict model-token limit.
 """
+
+import re
 
 from gliner import GLiNER
 
@@ -30,22 +24,25 @@ from pii_pipeline.schemas import TextBlock, Entity
 # MODEL INITIALIZATION
 # =========================================================
 
-# Keep the model in memory after its first use.
-# Loading a machine-learning model is relatively expensive, so we
-# avoid reloading it for every block of text.
 _model = None
 
 
+def _get_model():
+    """Load the shared GLiNER model lazily and reuse it."""
+    global _model
+
+    if _model is None:
+        _model = GLiNER.from_pretrained(
+            "urchade/gliner_small-v2.1"
+        )
+
+    return _model
+
+
 # =========================================================
-# ENTITY LABELS
+# ENTITY LABELS AND FILTERS
 # =========================================================
 
-# Natural-language entity labels supplied to GLiNER.
-# These labels describe the types of information the model should find.
-#
-# Some labels are currently filtered out after prediction because
-# Detector A already handles structured PII, such as email addresses,
-# phone numbers, and common identifier formats.
 _LABELS = [
     "person",
     "email address",
@@ -63,8 +60,7 @@ _LABELS = [
     "payment card number",
 ]
 
-# Generic role words that should not be treated as person names
-# when GLiNER predicts them as PERSON entities.
+
 _GENERIC_PERSON_TERMS = {
     "approver",
     "administrator",
@@ -75,26 +71,92 @@ _GENERIC_PERSON_TERMS = {
     "manager",
     "stakeholder",
     "stakeholders",
+    "employee",
+    "employees",
+    "director",
+    "directors",
+    "vendor",
+    "vendors",
+    "customer",
+    "customers",
+    "client",
+    "clients",
+    "author",
+    "approvers",
+    "administrators",
+    "reviewers",
+    "owners",
+    "managers",
 }
 
-def _get_model():
-    """
-    Return the shared GLiNER model, loading it on first use.
 
-    Lazy loading avoids loading the model when this module is imported
-    but GLiNER detection is never actually requested.
-    """
+_LABEL_MAP = {
+    "person": "PERSON",
+    "email address": "EMAIL",
+    "phone number": "PHONE",
+    "employee ID": "EMPLOYEE_ID",
+    "vendor ID": "VENDOR_ID",
+    "social security number": "SSN",
+    "passport number": "PASSPORT",
+    "tax identification number": "TAX_ID",
+    "date of birth": "DOB",
+    "address": "ADDRESS",
+    "street address": "ADDRESS",
+    "location": "LOCATION",
+    "financial account number": "ACCOUNT_NUMBER",
+    "payment card number": "PAYMENT_CARD",
+}
 
-    global _model
+_RETAINED_LABELS = {
+    "person",
+    "address",
+    "street address",
+}
 
-    if _model is None:
-        # Download or load the configured pretrained model.
-        # Subsequent calls reuse this same model instance.
-        _model = GLiNER.from_pretrained(
-            "urchade/gliner_small-v2.1"
+
+# =========================================================
+# LONG-TEXT CHUNKING
+# =========================================================
+
+def _iter_text_chunks(
+    text: str,
+    max_words: int = 20,
+    overlap_words: int = 5,
+):
+    """Yield text chunks and their original character offsets."""
+
+    if max_words <= 0:
+        raise ValueError("max_words must be positive")
+
+    if not 0 <= overlap_words < max_words:
+        raise ValueError(
+            "overlap_words must be between 0 and max_words - 1"
         )
 
-    return _model
+    words = list(re.finditer(r"\S+", text))
+
+    if not words:
+        return
+
+    if len(words) <= max_words:
+        yield 0, text
+        return
+
+    step = max_words - overlap_words
+
+    for i in range(0, len(words), step):
+        window = words[i:i + max_words]
+
+        if not window:
+            break
+
+        start = window[0].start()
+        end = window[-1].end()
+
+        yield start, text[start:end]
+
+        if i + max_words >= len(words):
+            break
 
 
 # =========================================================
@@ -104,129 +166,93 @@ def _get_model():
 def detect_with_gliner(
     blocks: list[TextBlock],
 ) -> list[Entity]:
-    """
-    Detect supplementary PII candidates in text blocks.
+    """Detect person names and addresses in text blocks."""
 
-    Args:
-        blocks: Extracted text blocks to analyze.
-
-    Returns:
-        Entity objects containing the predicted PII category,
-        original-text offsets, confidence score, detector identifier,
-        and detected text value.
-
-    Only person-name and address-related predictions are retained
-    by the current filtering policy.
-    """
-
-    # Retrieve the cached model instead of loading it for every call.
     model = _get_model()
-
-    # Collect all accepted predictions across the supplied blocks.
     entities: list[Entity] = []
 
-    # Translate GLiNER's natural-language labels into the category
-    # names expected by the rest of the PII pipeline.
-    label_map = {
-        "person": "PERSON",
-        "email address": "EMAIL",
-        "phone number": "PHONE",
-        "employee ID": "EMPLOYEE_ID",
-        "vendor ID": "VENDOR_ID",
-        "social security number": "SSN",
-        "passport number": "PASSPORT",
-        "tax identification number": "TAX_ID",
-        "date of birth": "DOB",
-        "address": "ADDRESS",
-        "street address": "ADDRESS",
-        "location": "LOCATION",
-        "financial account number": "ACCOUNT_NUMBER",
-        "payment card number": "PAYMENT_CARD",
-    }
-
     for block in blocks:
+        # Deduplicate entities returned by overlapping chunks.
+        seen_spans: set[tuple[int, int, str]] = set()
 
-        # Ask GLiNER to identify entities in this block.
-        # The threshold filters out predictions with scores below 0.5.
-        # This is a configurable cutoff, not a guarantee of correctness.
-        predictions = model.predict_entities(
-            block.text,
-            _LABELS,
-            threshold=0.5,
-        )
+        for chunk_start, chunk_text in _iter_text_chunks(block.text):
+            predictions = model.predict_entities(
+                chunk_text,
+                _LABELS,
+                threshold=0.5,
+            )
 
-        # Retain only categories that GLiNER currently supplements.
-        # Detector A handles the structured PII categories separately.
-        predictions = [
-            prediction
-            for prediction in predictions
-            if prediction["label"] in {
-                "person",
-                "address",
-                "street address",
-            }
-        ]
+            for prediction in predictions:
+                label = prediction["label"]
 
-        for prediction in predictions:
+                if label not in _RETAINED_LABELS:
+                    continue
 
-            # Extract the predicted text and its character offsets.
-            # GLiNER offsets are expected to refer to the original block.
-            value = prediction["text"]
-            start = prediction["start"]
-            end = prediction["end"]
+                value = prediction["text"]
+                local_start = prediction["start"]
+                local_end = prediction["end"]
 
-            # Reject invalid spans before creating an Entity.
-            # The start must precede the end, and both must fit inside
-            # the original text block.
-            if not (0 <= start < end <= len(block.text)):
-                continue
+                # Validate offsets relative to the current chunk.
+                if not (
+                    isinstance(local_start, int)
+                    and isinstance(local_end, int)
+                    and 0 <= local_start < local_end <= len(chunk_text)
+                ):
+                    continue
 
-            # Confirm that the offsets select exactly the predicted text.
-            # This prevents inconsistent spans from reaching redaction.
-            if block.text[start:end] != value:
-                continue
+                if chunk_text[local_start:local_end] != value:
+                    continue
 
-            # "Email address" is a contact-information label, not
-            # a physical address when predicted as an ADDRESS entity.
-            if (
-                prediction["label"] in {"address", "street address"}
-                and value.strip().casefold() == "email address"
-            ):
-                continue
+                # Convert chunk-relative offsets to original-block offsets.
+                start = chunk_start + local_start
+                end = chunk_start + local_end
 
-            # Reject implausibly short person-name predictions.
-            # Do not apply this rule to addresses.
-            if prediction["label"] == "person":
+                if not (0 <= start < end <= len(block.text)):
+                    continue
+
+                if block.text[start:end] != value:
+                    continue
+
                 normalized_value = value.strip().casefold()
 
-                if len(normalized_value) < 2:
+                # Remove a known address-label false positive.
+                if (
+                    label in {"address", "street address"}
+                    and normalized_value == "email address"
+                ):
                     continue
 
-                # Generic role terms are not person names by themselves.
-                if normalized_value in _GENERIC_PERSON_TERMS:
+                # Filter implausibly short or generic person predictions.
+                if label == "person":
+                    if len(normalized_value) < 2:
+                        continue
+
+                    if normalized_value in _GENERIC_PERSON_TERMS:
+                        continue
+
+                pii_type = _LABEL_MAP.get(label)
+
+                if pii_type is None:
                     continue
 
-            # Convert the model's label to the pipeline's PII category.
-            label = prediction["label"]
-            pii_type = label_map.get(label)
+                span_key = (start, end, pii_type)
 
-            # Skip any label that has no corresponding category.
-            if pii_type is None:
-                continue
+                if span_key in seen_spans:
+                    continue
 
-            # Convert the model prediction into the shared Entity schema
-            # so downstream pipeline stages can process it consistently.
-            entities.append(
-                Entity(
-                    file=block.file,
-                    block_index=block.index,
-                    start=start,
-                    end=end,
-                    pii_type=pii_type,
-                    confidence=float(prediction["score"]),
-                    detector="gliner",
-                    value=value,
+                seen_spans.add(span_key)
+
+                entities.append(
+                    Entity(
+                        file=block.file,
+                        block_index=block.index,
+                        start=start,
+                        end=end,
+                        pii_type=pii_type,
+                        confidence=float(prediction["score"]),
+                        detector="gliner",
+                        value=value,
+                    )
                 )
-            )
 
     return entities
