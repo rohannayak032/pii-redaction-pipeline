@@ -4,7 +4,7 @@ Fine-tune an address NER model on data/indian_address (see address_data).
 Starts from the shiprocket-ai checkpoint, so its 11 component types and
 classifier head are kept. Training teaches it which words around an
 address are not part of it, and that most sentences hold no address.
-Runs on CPU.
+Uses a GPU when there is one (e.g. Google Colab), else the CPU.
 
 Run: python -m pii_pipeline.detection.address_train modernbert [epochs]
 The epoch with the best dev score is saved to data/models/<model>-ft/;
@@ -78,6 +78,9 @@ def train(name: str, epochs: int = 3, lr: float = 3e-5, batch_size: int = 16, se
     base = MODELS.get(name, name)
     tokenizer = AutoTokenizer.from_pretrained(base)
     model = AutoModelForTokenClassification.from_pretrained(base)
+    # The dev-scoring pipeline moves the model to a GPU when there is one, so train there too.
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model.to(device)
     label2id = {label: int(i) for i, label in model.config.id2label.items()}
 
     train_set = [encode(tokenizer, ex, label2id) for ex in load("train")]
@@ -98,7 +101,8 @@ def train(name: str, epochs: int = 3, lr: float = 3e-5, batch_size: int = 16, se
         random.shuffle(train_set)
         started, total = time.time(), 0.0
         for i in range(0, len(train_set), batch_size):
-            loss = model(**collate(train_set[i:i + batch_size])).loss
+            batch = collate(train_set[i:i + batch_size])
+            loss = model(**{k: v.to(device) for k, v in batch.items()}).loss
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
