@@ -14,5 +14,7 @@ pillow
 # Detection
 spacy
 presidio-analyzer
+gliner
+protobuf          # GLiNER's DeBERTa tokenizer fails to load without it
 faker
 phonenumbers

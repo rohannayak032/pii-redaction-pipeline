@@ -406,7 +406,7 @@ def test_valid_payment_card():
     block = make("Test card: 4111111111111111")
 
     entities = detect([block])
-    cards = [e for e in entities if e.pii_type == "PAYMENT_CARD"]
+    cards = [e for e in entities if e.pii_type == "CREDIT_CARD"]
 
     assert len(cards) == 1
     assert cards[0].value == "4111111111111111"
@@ -419,7 +419,7 @@ def test_payment_card_with_spaces():
     block = make("Test card: 4111 1111 1111 1111")
 
     entities = detect([block])
-    cards = [e for e in entities if e.pii_type == "PAYMENT_CARD"]
+    cards = [e for e in entities if e.pii_type == "CREDIT_CARD"]
 
     assert len(cards) == 1
     assert cards[0].value == "4111 1111 1111 1111"
@@ -432,7 +432,7 @@ def test_payment_card_with_hyphens():
     block = make("Test card: 4111-1111-1111-1111")
 
     entities = detect([block])
-    cards = [e for e in entities if e.pii_type == "PAYMENT_CARD"]
+    cards = [e for e in entities if e.pii_type == "CREDIT_CARD"]
 
     assert len(cards) == 1
     assert cards[0].value == "4111-1111-1111-1111"
@@ -445,6 +445,6 @@ def test_invalid_luhn_number_not_detected_as_payment_card():
     block = make("Test number: 4111111111111112")
 
     entities = detect([block])
-    cards = [e for e in entities if e.pii_type == "PAYMENT_CARD"]
+    cards = [e for e in entities if e.pii_type == "CREDIT_CARD"]
 
     assert cards == []
