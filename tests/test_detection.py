@@ -493,3 +493,22 @@ def test_invalid_luhn_number_not_detected_as_payment_card():
     cards = [e for e in entities if e.pii_type == "CREDIT_CARD"]
 
     assert cards == []
+
+
+# =========================================================
+# INDIAN ADDRESS TESTS
+# =========================================================
+
+def test_indian_address_detected_as_one_span():
+    """Detect a whole Indian address in a sentence, not just its parts."""
+
+    address = "Flat 12B, Sai Residency, MG Road, Indiranagar, Bengaluru, Karnataka 560038"
+    block = make(f"Please deliver the parcel to {address} before Friday.")
+
+    entities = detect([block])
+    found = [e for e in entities if e.detector.startswith("address_ner")]
+
+    assert len(found) == 1
+    assert found[0].pii_type == "ADDRESS"
+    assert found[0].start <= block.text.index(address)
+    assert found[0].end >= block.text.index(address) + len(address)
