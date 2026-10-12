@@ -21,6 +21,8 @@ Limitations:
   complete address.
 """
 
+import re
+
 from gliner import GLiNER
 
 from pii_pipeline.schemas import TextBlock, Entity
@@ -40,28 +42,30 @@ _model = None
 # ENTITY LABELS
 # =========================================================
 
-# Natural-language entity labels supplied to GLiNER.
-# These labels describe the types of information the model should find.
+# GLiNER label -> the pipeline's PII category.
 #
-# Some labels are currently filtered out after prediction because
-# Detector A already handles structured PII, such as email addresses,
-# phone numbers, and common identifier formats.
-_LABELS = [
-    "person",
-    "email address",
-    "phone number",
-    "employee ID",
-    "vendor ID",
-    "social security number",
-    "passport number",
-    "tax identification number",
-    "date of birth",
-    "address",
-    "street address",
-    "location",
-    "financial account number",
-    "payment card number",
-]
+# Ask only for labels we keep. GLiNER gives each span one label, so
+# extra labels steal spans: with "location" in the list, "Mumbai" in
+# an address became a location and was thrown away. Structured PII
+# (emails, phones, IDs) is left to Detector A.
+_LABEL_MAP = {
+    "person": "PERSON",
+    "address": "ADDRESS",
+    "street address": "ADDRESS",
+}
+_LABELS = list(_LABEL_MAP)
+
+# GLiNER flags pronouns ("She", "He") as people.
+_PRONOUNS = {
+    "i", "me", "you", "he", "him", "she", "her", "it", "we", "us",
+    "they", "them", "his", "hers", "their", "theirs",
+}
+
+# GLiNER reads at most ~384 tokens and silently ignores the rest, and
+# it counts punctuation as tokens. Long blocks are therefore read in
+# overlapping windows of whitespace-separated words.
+_WINDOW_WORDS = 200
+_OVERLAP_WORDS = 50   # an entity shorter than this is whole in some window
 
 
 def _get_model():
@@ -106,94 +110,75 @@ def detect_with_gliner(
     by the current filtering policy.
     """
 
+
     # Retrieve the cached model instead of loading it for every call.
     model = _get_model()
 
     # Collect all accepted predictions across the supplied blocks.
     entities: list[Entity] = []
 
-    # Translate GLiNER's natural-language labels into the category
-    # names expected by the rest of the PII pipeline.
-    label_map = {
-        "person": "PERSON",
-        "email address": "EMAIL",
-        "phone number": "PHONE",
-        "employee ID": "EMPLOYEE_ID",
-        "vendor ID": "VENDOR_ID",
-        "social security number": "SSN",
-        "passport number": "PASSPORT",
-        "tax identification number": "TAX_ID",
-        "date of birth": "DOB",
-        "address": "ADDRESS",
-        "street address": "ADDRESS",
-        "location": "LOCATION",
-        "financial account number": "ACCOUNT_NUMBER",
-        "payment card number": "PAYMENT_CARD",
-    }
-
     for block in blocks:
 
-        # Ask GLiNER to identify entities in this block.
-        # The threshold filters out predictions with scores below 0.5.
-        # This is a configurable cutoff, not a guarantee of correctness.
-        predictions = model.predict_entities(
-            block.text,
-            _LABELS,
-            threshold=0.5,
-        )
+        # Overlapping windows find the same entity twice.
+        seen: set[tuple[int, int, str]] = set()
 
-        # Retain only categories that GLiNER currently supplements.
-        # Detector A handles the structured PII categories separately.
-        predictions = [
-            prediction
-            for prediction in predictions
-            if prediction["label"] in {
-                "person",
-                "address",
-                "street address",
-            }
-        ]
+        for offset, chunk in _windows(block.text):
 
-        for prediction in predictions:
+            # The threshold filters out predictions with scores below 0.5.
+            # This is a configurable cutoff, not a guarantee of correctness.
+            predictions = model.predict_entities(chunk, _LABELS, threshold=0.5)
 
-            # Extract the predicted text and its character offsets.
-            # GLiNER offsets are expected to refer to the original block.
-            value = prediction["text"]
-            start = prediction["start"]
-            end = prediction["end"]
+            for prediction in predictions:
 
-            # Reject invalid spans before creating an Entity.
-            # The start must precede the end, and both must fit inside
-            # the original text block.
-            if not (0 <= start < end <= len(block.text)):
-                continue
+                # GLiNER offsets refer to the chunk; shift them to the block.
+                value = prediction["text"]
+                start = prediction["start"] + offset
+                end = prediction["end"] + offset
 
-            # Confirm that the offsets select exactly the predicted text.
-            # This prevents inconsistent spans from reaching redaction.
-            if block.text[start:end] != value:
-                continue
+                # Reject spans that do not select exactly the predicted
+                # text, so inconsistent offsets never reach redaction.
+                if not (0 <= start < end <= len(block.text)):
+                    continue
+                if block.text[start:end] != value:
+                    continue
 
-            # Convert the model's label to the pipeline's PII category.
-            label = prediction["label"]
-            pii_type = label_map.get(label)
+                pii_type = _LABEL_MAP[prediction["label"]]
 
-            # Skip any label that has no corresponding category.
-            if pii_type is None:
-                continue
+                if pii_type == "PERSON" and value.lower() in _PRONOUNS:
+                    continue
 
-            # Convert the model prediction into the shared Entity schema
-            # so downstream pipeline stages can process it consistently.
-            entities.append(
-                Entity(
-                    file=block.file,
-                    block_index=block.index,
-                    start=start,
-                    end=end,
-                    pii_type=pii_type,
-                    confidence=float(prediction["score"]),
-                    detector="gliner",
-                    value=value,
+                if (start, end, pii_type) in seen:
+                    continue
+                seen.add((start, end, pii_type))
+
+                entities.append(
+                    Entity(
+                        file=block.file,
+                        block_index=block.index,
+                        start=start,
+                        end=end,
+                        pii_type=pii_type,
+                        confidence=float(prediction["score"]),
+                        detector="gliner",
+                        value=value,
+                    )
                 )
-            )
 
     return entities
+
+
+def _windows(text: str) -> list[tuple[int, str]]:
+    """Split text into overlapping word windows: (start offset, chunk)."""
+
+    words = list(re.finditer(r"\S+", text))
+    if len(words) <= _WINDOW_WORDS:
+        return [(0, text)]
+
+    windows = []
+    step = _WINDOW_WORDS - _OVERLAP_WORDS
+    for i in range(0, len(words), step):
+        first, last = words[i], words[min(i + _WINDOW_WORDS, len(words)) - 1]
+        windows.append((first.start(), text[first.start():last.end()]))
+        if i + _WINDOW_WORDS >= len(words):
+            break
+    return windows
