@@ -145,15 +145,10 @@ def test_does_not_detect_date_as_phone():
     # Parentheses stay outside the span.
     ("EMP-37655", "Employee ID: (EMP-37655)"),
 ])
-<<<<<<< HEAD
 def test_employee_id_formats(employee_id, text):
-    block = make(text)
-=======
-def test_employee_id_formats(employee_id):
     """Detect employee IDs in the supported formats."""
 
-    block = make(f"Employee ID: {employee_id}")
->>>>>>> 812733788ee6e5c41146211be0f3f22420b15f84
+    block = make(text)
 
     entities = detect([block])
     employee_ids = [
@@ -163,8 +158,8 @@ def test_employee_id_formats(employee_id):
     assert len(employee_ids) == 1
     assert employee_ids[0].value == employee_id
 
-    # Check that the complete identifier, including optional
-    # parentheses, is covered by the detected span.
+    # Check that the span covers exactly the identifier,
+    # without surrounding parentheses.
     assert block.text[
         employee_ids[0].start:employee_ids[0].end
     ] == employee_id
@@ -359,7 +354,6 @@ def test_person_detection():
     assert persons[0].start == 0
     assert persons[0].end == 10
 
-<<<<<<< HEAD
 def test_all_caps_person_detection():
     block = make("PRIYA NAIR | EMP-37655 | Finance")
 
@@ -399,7 +393,7 @@ def test_indian_passport_detection():
     passports = [e for e in detect([block]) if e.pii_type == "PASSPORT"]
 
     assert [block.text[e.start:e.end] for e in passports] == ["J8369854"]
-=======
+
 
 # =========================================================
 # PAYMENT CARD TESTS
@@ -454,4 +448,3 @@ def test_invalid_luhn_number_not_detected_as_payment_card():
     cards = [e for e in entities if e.pii_type == "PAYMENT_CARD"]
 
     assert cards == []
->>>>>>> 812733788ee6e5c41146211be0f3f22420b15f84
