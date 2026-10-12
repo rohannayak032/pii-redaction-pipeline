@@ -5,9 +5,10 @@ The shiprocket-ai address models tag address *components* (house,
 road, locality, city, state, pincode...). Redaction needs the whole
 address, so neighbouring components are merged into one ADDRESS span.
 
-A merged span is kept only if it has at least two different component
-types. A lone city ("our Pune office") or a lone 6-digit number is not
-an address, and the models tag those even outside addresses.
+A merged span is kept only if two different component types sit close
+together somewhere in it. A lone city ("our Pune office"), a list of
+cities or a lone 6-digit number is not an address, and the models tag
+those even outside addresses.
 """
 
 from transformers import pipeline
@@ -18,20 +19,26 @@ from pii_pipeline.detection.detector_b import _windows
 
 MODEL = "shiprocket-ai/open-modernbert-indian-address-ner"
 
-# Components separated by at most this many characters belong to the same
-# address. Gaps hold punctuation and untagged prefixes like ", P.O-".
-_MAX_GAP = 12
-_MIN_TYPES = 2
+# Components at most _MAX_GAP characters apart belong to the same address.
+# Gaps hold punctuation and untagged filler like ", P.O-" or "Unclassified";
+# 99% of gaps in the gold data are under 43 characters.
+_MAX_GAP = 40
+# An address needs two different component types at most this far apart.
+_CORE_GAP = 12
 
 # Loading a model is expensive, so each one is loaded once.
 _models: dict = {}
 
 
+def make_pipeline(model, tokenizer=None):
+    """Token-classification pipeline from a model name, folder or loaded model."""
+    return pipeline("token-classification", model=model, tokenizer=tokenizer,
+                    aggregation_strategy="simple")
+
+
 def _get_model(name: str):
     if name not in _models:
-        _models[name] = pipeline(
-            "token-classification", model=name, aggregation_strategy="simple",
-        )
+        _models[name] = make_pipeline(name)
     return _models[name]
 
 
@@ -43,23 +50,32 @@ def merge_components(text: str, components: list[dict]) -> list[tuple[int, int, 
     """
     groups: list[list[dict]] = []
     for c in sorted(components, key=lambda c: c["start"]):
-        if groups:
-            gap = text[groups[-1][-1]["end"]:c["start"]]
-            # A blank line ends a paragraph, and so ends the address.
-            if len(gap) <= _MAX_GAP and "\n\n" not in gap:
-                groups[-1].append(c)
-                continue
-        groups.append([c])
+        if groups and _close(text, groups[-1][-1], c, _MAX_GAP):
+            groups[-1].append(c)
+        else:
+            groups.append([c])
 
     addresses = []
     for g in groups:
-        if len({c["label"] for c in g}) < _MIN_TYPES:
+        if not any(a["label"] != b["label"] and _close(text, a, b, _CORE_GAP)
+                   for a, b in zip(g, g[1:])):
             continue
         start = g[0]["start"]
         end = max(c["end"] for c in g)
+        # Models cut words in half ("Gu" + "wahati"); never leave half a word visible.
+        while start > 0 and text[start - 1].isalnum():
+            start -= 1
+        while end < len(text) and text[end].isalnum():
+            end += 1
         score = sum(c["score"] for c in g) / len(g)
         addresses.append((start, end, score))
     return addresses
+
+
+def _close(text: str, a: dict, b: dict, max_gap: int) -> bool:
+    gap = text[a["end"]:b["start"]]
+    # A blank line ends a paragraph, and so ends the address.
+    return len(gap) <= max_gap and "\n\n" not in gap
 
 
 def detect_indian_addresses(blocks: list[TextBlock], model: str = MODEL) -> list[Entity]:
