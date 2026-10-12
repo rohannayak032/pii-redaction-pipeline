@@ -338,6 +338,47 @@ def test_ordinary_date_not_detected_as_dob(text):
 
 
 # =========================================================
+# DIRECTOR / VENDOR ID TESTS
+# =========================================================
+
+@pytest.mark.parametrize("pii_type, value", [
+    ("DIRECTOR_ID", "DIR-0042"),
+    ("DIRECTOR_ID", "DIR-IN-12345"),
+    ("VENDOR_ID", "MER-4471"),
+    ("VENDOR_ID", "MER-IN-4471"),
+])
+def test_director_and_vendor_ids(pii_type, value):
+    block = make(f"Approved under {value} today")
+
+    found = [block.text[e.start:e.end] for e in detect([block]) if e.pii_type == pii_type]
+
+    assert found == [value]
+
+
+@pytest.mark.parametrize("text", ["DIR-12", "MER-123456", "XDIR-0042", "MER-IN-4471A"])
+def test_invalid_director_and_vendor_ids_not_detected(text):
+    entities = detect([make(text)])
+
+    assert [e for e in entities if e.pii_type in ("DIRECTOR_ID", "VENDOR_ID")] == []
+
+
+# =========================================================
+# US ADDRESS TESTS
+# =========================================================
+
+def test_us_address_covers_city_state_and_zip():
+    address = "88 Willowbank Court, Hoboken, NJ 07030"
+    block = make(f"Office at {address}.")
+
+    found = [
+        block.text[e.start:e.end] for e in detect([block])
+        if e.detector == "regex.us_address"
+    ]
+
+    assert found == [address]
+
+
+# =========================================================
 # PERSON TESTS
 # =========================================================
 

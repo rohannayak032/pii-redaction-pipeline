@@ -101,6 +101,28 @@ EMPLOYEE_ID = re.compile(
     r"(?![A-Za-z0-9])"   # Not immediately followed by a letter or digit.
 )
 
+# Director and vendor IDs, observed as DIR-0042 and MER-IN-4471
+# (optional two-letter country segment, 3 to 5 digits).
+DIRECTOR_ID = re.compile(r"(?<![A-Za-z0-9])DIR-(?:[A-Z]{2}-)?\d{3,5}(?![A-Za-z0-9])")
+VENDOR_ID = re.compile(r"(?<![A-Za-z0-9])MER-(?:[A-Z]{2}-)?\d{3,5}(?![A-Za-z0-9])")
+
+
+# =========================================================
+# US STREET ADDRESS DETECTION
+# =========================================================
+
+# Number + street name + street type, then optional unit, city and
+# "STATE 12345", e.g. "88 Willowbank Court, Hoboken, NJ 07030".
+# GLiNER finds the street part but drops the city and ZIP; this
+# regex covers the whole address, and redaction joins overlaps.
+US_ADDRESS = re.compile(
+    r"\b\d{1,5}[ \t]+(?:[A-Z][A-Za-z.'-]+[ \t]+){1,3}"
+    r"(?:Street|St|Avenue|Ave|Road|Rd|Lane|Ln|Court|Ct|Crescent|Drive|Dr|Boulevard|Blvd|Way|Place|Pl|Terrace|Square)\b\.?"
+    r"(?:,?[ \t]*(?:Apartment|Apt|Suite|Ste|Unit|Floor)[ \t]*[\w-]+)?"
+    r"(?:,[ \t]*[A-Z][A-Za-z.' -]+)?"
+    r"(?:,[ \t]*[A-Z]{2}[ \t]+\d{5}(?:-\d{4})?)?"
+)
+
 
 # =========================================================
 # SOCIAL SECURITY NUMBER (SSN) DETECTION
@@ -395,6 +417,9 @@ def find_presidio(block: TextBlock) -> list[Entity]:
 PATTERNS = [
     (EMAIL, "EMAIL", 0.90, "regex.email"),
     (EMPLOYEE_ID, "EMPLOYEE_ID", 0.95, "regex.employee_id"),
+    (DIRECTOR_ID, "DIRECTOR_ID", 0.95, "regex.director_id"),
+    (VENDOR_ID, "VENDOR_ID", 0.95, "regex.vendor_id"),
+    (US_ADDRESS, "ADDRESS", 0.85, "regex.us_address"),
     (SSN, "SSN", 0.95, "regex.ssn"),
     (PAN, "PAN", 0.95, "regex.pan"),
     (PASSPORT, "PASSPORT", 0.95, "regex.passport"),
