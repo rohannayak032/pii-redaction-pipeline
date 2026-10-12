@@ -11,8 +11,6 @@ cities or a lone 6-digit number is not an address, and the models tag
 those even outside addresses.
 """
 
-from pathlib import Path
-
 from transformers import pipeline
 
 from pii_pipeline.schemas import TextBlock, Entity
@@ -21,9 +19,8 @@ from pii_pipeline.detection.detector_b import _windows
 
 # TinyBERT fine-tuned with notebooks/address_ner_colab.ipynb: on the test set it
 # matched fine-tuned ModernBERT's recall at a quarter of the latency.
-# data/ is gitignored, so without the folder the base model is used.
-_FINE_TUNED = Path("data/models/open-tinybert-indian-address-ner-ft")
-MODEL = _FINE_TUNED.as_posix() if _FINE_TUNED.exists() else "shiprocket-ai/open-tinybert-indian-address-ner"
+# Hosted on Hugging Face so everyone gets it; downloaded once, then cached.
+MODEL = "PhoenixKnight/indian-address-tinybert-ft"
 
 # Components at most _MAX_GAP characters apart belong to the same address.
 # Gaps hold punctuation and untagged filler like ", P.O-" or "Unclassified";
