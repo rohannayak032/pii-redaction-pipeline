@@ -83,14 +83,57 @@ def test_merge_joins_neighbouring_components():
     assert text[start:end] == "12, MG Road, Bengaluru 560034"
 
 
+def test_merge_extends_to_whole_words():
+    text = "Office at Zoo Road Guwahati today."
+    comps = [
+        {**span(text, "oo Road", "road"), "score": 0.9},
+        {**span(text, "Guwa", "city"), "score": 0.9},
+    ]
+    [(start, end, _)] = merge_components(text, comps)
+    assert text[start:end] == "Zoo Road Guwahati"
+
+
 def test_merge_drops_lone_city():
     text = "Our Pune office is closed."
     comps = [{**span(text, "Pune", "city"), "score": 0.99}]
     assert merge_components(text, comps) == []
 
 
+def test_merge_joins_far_part_to_an_address():
+    text = "12, MG Road, Koramangala (opposite the old bus depot) 560034"
+    comps = [
+        {**span(text, "12", "house_details"), "score": 0.9},
+        {**span(text, "MG Road", "road"), "score": 0.9},
+        {**span(text, "Koramangala", "locality"), "score": 0.9},
+        {**span(text, "560034", "pincode"), "score": 0.9},
+    ]
+    [(start, end, _)] = merge_components(text, comps)
+    assert text[start:end] == text
+
+
+def test_merge_ignores_distant_lone_mentions():
+    # Each mention alone is not an address, and they are too far apart
+    # to count as one.
+    text = "Ticket 714570 was resolved by the Kamrup support team."
+    comps = [
+        {**span(text, "714570", "pincode"), "score": 0.9},
+        {**span(text, "Kamrup", "city"), "score": 0.9},
+    ]
+    assert merge_components(text, comps) == []
+
+
+def test_merge_ignores_a_list_of_cities():
+    text = "We are hiring engineers in Pune and Mumbai."
+    comps = [
+        {**span(text, "Pune", "city"), "score": 0.9},
+        {**span(text, "Mumbai", "city"), "score": 0.9},
+    ]
+    assert merge_components(text, comps) == []
+
+
 def test_merge_splits_distant_components():
-    text = "Bengaluru 560034 is far from here. Much later we visited Chennai, Tamil Nadu."
+    text = ("Bengaluru 560034 is where the old office was. "
+            "Many years later the whole team moved to Chennai, Tamil Nadu.")
     comps = [
         {**span(text, "Bengaluru", "city"), "score": 0.9},
         {**span(text, "560034", "pincode"), "score": 0.9},
@@ -100,13 +143,39 @@ def test_merge_splits_distant_components():
     assert len(merge_components(text, comps)) == 2
 
 
+def test_encode_gives_bio_labels_to_component_tokens():
+    from transformers import AutoConfig, AutoTokenizer
+    from pii_pipeline.detection.address_train import encode
+    from pii_pipeline.detection.detector_address import MODEL
+
+    tokenizer = AutoTokenizer.from_pretrained(MODEL)
+    label2id = {label: int(i) for i, label in AutoConfig.from_pretrained(MODEL).id2label.items()}
+    id2label = {i: label for label, i in label2id.items()}
+
+    text = "Ship to 12, MG Road, Bengaluru 560034 today."
+    example = {"text": text, "spans": [span(text, "MG Road", "road"),
+                                       span(text, "Bengaluru", "city")]}
+    labels = encode(tokenizer, example, label2id)["labels"]
+    offsets = tokenizer(text, return_offsets_mapping=True)["offset_mapping"]
+
+    tags = {}
+    for (s, e), label in zip(offsets, labels):
+        if label != -100:
+            tags.setdefault(id2label[label], []).append(text[s:e].strip())
+    assert labels[0] == labels[-1] == -100   # special tokens
+    assert tags["B-road"][0] == "MG" and "Road" in tags["I-road"]
+    assert "".join(tags["B-city"] + tags.get("I-city", [])) == "Bengaluru"
+    outside = "".join(tags["O"])   # unlabelled tokens, in order
+    assert "560034" in outside and "today" in outside
+
+
 def test_score_counts_leaks_and_false_positives():
-    examples = [
-        {"text": "At 12 MG Road.", "address": [3, 13]},
-        {"text": "At 12 MG Road.", "address": [3, 13]},
-        {"text": "Pune is hot.", "address": None},
-    ]
+    text = "At 12 MG Road."
+    address = {"text": text, "address": [3, 13],
+               "spans": [span(text, "12", "house_details"), span(text, "MG Road", "road")]}
+    examples = [address, address, {"text": "Pune is hot.", "address": None, "spans": []}]
     # full cover, cover missing "12", a false positive on the negative
     result = score(examples, [[(3, 13)], [(6, 13)], [(0, 4)]])
     assert result["complete_recall"] == 0.5
+    assert result["component_recall"] == 0.75
     assert result["false_positive_rate"] == 1.0
