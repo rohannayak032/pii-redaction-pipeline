@@ -12,6 +12,7 @@ pytesseract
 pillow
 
 # Detection
+presidio-analyzer>=2.2.364,<3
 spacy
 presidio-analyzer
 faker
