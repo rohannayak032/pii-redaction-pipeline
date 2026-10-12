@@ -1,3 +1,5 @@
+"""Tests for rule-based and Presidio-based PII detection."""
+
 import pytest
 
 from pii_pipeline.schemas import TextBlock
@@ -5,7 +7,13 @@ from pii_pipeline.detection.detector import detect
 
 
 def make(text):
-    # Create a TextBlock for testing.
+    """
+    Create a TextBlock containing the supplied text.
+
+    Using a helper keeps individual tests short and consistent.
+    The file name, location, and block index are fixed because
+    most tests focus on detection behavior rather than metadata.
+    """
     return TextBlock("a.txt", "para 1", 0, text)
 
 
@@ -14,20 +22,26 @@ def make(text):
 # =========================================================
 
 def test_finds_email_and_offsets_are_exact():
+    """Detect an email and verify its value and character offsets."""
+
     block = make("Contact alice@example.com today")
 
     entities = detect([block])
 
-    assert len(entities) == 1
+    # Keep only detections classified as email addresses.
+    emails = [e for e in entities if e.pii_type == "EMAIL"]
 
-    e = entities[0]
+    assert len(emails) == 1
+    assert emails[0].value == "alice@example.com"
 
-    assert e.pii_type == "EMAIL"
-    assert e.value == "alice@example.com"
-    assert block.text[e.start:e.end] == "alice@example.com"
+    # Confirm that the offsets point to the exact email in the
+    # original text. This is important for accurate redaction.
+    assert block.text[emails[0].start:emails[0].end] == "alice@example.com"
 
 
 def test_two_emails_in_one_block():
+    """Detect multiple email addresses in the same text block."""
+
     entities = detect([make("a@x.com and b@y.org")])
 
     emails = [e for e in entities if e.pii_type == "EMAIL"]
@@ -36,10 +50,11 @@ def test_two_emails_in_one_block():
 
 
 def test_trailing_full_stop_not_included():
+    """Ensure sentence punctuation is not included in the email span."""
+
     block = make("Write to alice@example.com.")
 
     entities = detect([block])
-
     emails = [e for e in entities if e.pii_type == "EMAIL"]
 
     assert len(emails) == 1
@@ -47,7 +62,11 @@ def test_trailing_full_stop_not_included():
 
 
 def test_no_email_no_result():
-    assert detect([make("Nothing to see here, 123 at home")]) == []
+    """Ensure ordinary text without an email produces no email entity."""
+
+    entities = detect([make("Nothing to see here, 123 at home")])
+
+    assert not any(e.pii_type == "EMAIL" for e in entities)
 
 
 # =========================================================
@@ -67,19 +86,18 @@ def test_no_email_no_result():
     "022 2345 6789",
 ])
 def test_phone_formats(phone):
+    """Detect phone numbers in several common international formats."""
+
     block = make(f"Call {phone} now")
 
     entities = detect([block])
-
     phones = [e for e in entities if e.pii_type == "PHONE"]
 
     assert len(phones) == 1
+    assert phones[0].value == phone
 
-    e = phones[0]
-
-    assert e.pii_type == "PHONE"
-    assert e.value == phone
-    assert block.text[e.start:e.end] == phone
+    # Verify that formatting characters and offsets are preserved.
+    assert block.text[phones[0].start:phones[0].end] == phone
 
 
 @pytest.mark.parametrize("text", [
@@ -88,6 +106,8 @@ def test_phone_formats(phone):
     "Ref 12345678901234567890 end",
 ])
 def test_phone_not_matched(text):
+    """Reject examples that should not be identified as phone numbers."""
+
     entities = detect([make(text)])
 
     phones = [e for e in entities if e.pii_type == "PHONE"]
@@ -96,9 +116,9 @@ def test_phone_not_matched(text):
 
 
 def test_does_not_detect_random_number_as_phone():
-    block = make("The transaction ID is 1234567890")
+    """Avoid treating an ordinary transaction number as a phone number."""
 
-    entities = detect([block])
+    entities = detect([make("The transaction ID is 1234567890")])
 
     phones = [e for e in entities if e.pii_type == "PHONE"]
 
@@ -106,9 +126,9 @@ def test_does_not_detect_random_number_as_phone():
 
 
 def test_does_not_detect_date_as_phone():
-    block = make("The date is 12/05/2026")
+    """Ensure a date is not incorrectly classified as a phone number."""
 
-    entities = detect([block])
+    entities = detect([make("The date is 12/05/2026")])
 
     phones = [e for e in entities if e.pii_type == "PHONE"]
 
@@ -125,22 +145,29 @@ def test_does_not_detect_date_as_phone():
     # Parentheses stay outside the span.
     ("EMP-37655", "Employee ID: (EMP-37655)"),
 ])
+<<<<<<< HEAD
 def test_employee_id_formats(employee_id, text):
     block = make(text)
+=======
+def test_employee_id_formats(employee_id):
+    """Detect employee IDs in the supported formats."""
+
+    block = make(f"Employee ID: {employee_id}")
+>>>>>>> 812733788ee6e5c41146211be0f3f22420b15f84
 
     entities = detect([block])
-
     employee_ids = [
-        e for e in entities
-        if e.pii_type == "EMPLOYEE_ID"
+        e for e in entities if e.pii_type == "EMPLOYEE_ID"
     ]
 
     assert len(employee_ids) == 1
+    assert employee_ids[0].value == employee_id
 
-    e = employee_ids[0]
-
-    assert e.value == employee_id
-    assert block.text[e.start:e.end] == employee_id
+    # Check that the complete identifier, including optional
+    # parentheses, is covered by the detected span.
+    assert block.text[
+        employee_ids[0].start:employee_ids[0].end
+    ] == employee_id
 
 
 @pytest.mark.parametrize("text", [
@@ -149,11 +176,12 @@ def test_employee_id_formats(employee_id, text):
     "XEMP-37655ABC",
 ])
 def test_invalid_employee_id_not_detected(text):
+    """Reject employee IDs with invalid lengths or surrounding characters."""
+
     entities = detect([make(text)])
 
     employee_ids = [
-        e for e in entities
-        if e.pii_type == "EMPLOYEE_ID"
+        e for e in entities if e.pii_type == "EMPLOYEE_ID"
     ]
 
     assert employee_ids == []
@@ -168,18 +196,16 @@ def test_invalid_employee_id_not_detected(text):
     "900-42-7721",
 ])
 def test_ssn_formats(ssn):
+    """Detect SSNs that match the supported hyphenated format."""
+
     block = make(f"SSN: {ssn}")
 
     entities = detect([block])
-
     ssns = [e for e in entities if e.pii_type == "SSN"]
 
     assert len(ssns) == 1
-
-    e = ssns[0]
-
-    assert e.value == ssn
-    assert block.text[e.start:e.end] == ssn
+    assert ssns[0].value == ssn
+    assert block.text[ssns[0].start:ssns[0].end] == ssn
 
 
 @pytest.mark.parametrize("text", [
@@ -188,6 +214,8 @@ def test_ssn_formats(ssn):
     "805-52-043",
 ])
 def test_invalid_ssn_not_detected(text):
+    """Reject SSNs that do not match the expected structure."""
+
     entities = detect([make(text)])
 
     ssns = [e for e in entities if e.pii_type == "SSN"]
@@ -204,18 +232,16 @@ def test_invalid_ssn_not_detected(text):
     "QWERT1234Z",
 ])
 def test_pan_formats(pan):
+    """Detect PAN identifiers matching the expected format."""
+
     block = make(f"PAN: {pan}")
 
     entities = detect([block])
-
     pans = [e for e in entities if e.pii_type == "PAN"]
 
     assert len(pans) == 1
-
-    e = pans[0]
-
-    assert e.value == pan
-    assert block.text[e.start:e.end] == pan
+    assert pans[0].value == pan
+    assert block.text[pans[0].start:pans[0].end] == pan
 
 
 @pytest.mark.parametrize("text", [
@@ -225,6 +251,8 @@ def test_pan_formats(pan):
     "XABCDE1234FY",
 ])
 def test_invalid_pan_not_detected(text):
+    """Reject PAN candidates with incorrect structure or boundaries."""
+
     entities = detect([make(text)])
 
     pans = [e for e in entities if e.pii_type == "PAN"]
@@ -239,23 +267,19 @@ def test_invalid_pan_not_detected(text):
 @pytest.mark.parametrize("passport", [
     "AB1#23456",
     "CD2#78901",
+    "TK4820913",  # Passport-style format found in the case-study example.
 ])
 def test_passport_formats(passport):
+    """Detect passport identifiers matching the project's supported formats."""
+
     block = make(f"Passport: {passport}")
 
     entities = detect([block])
-
-    passports = [
-        e for e in entities
-        if e.pii_type == "PASSPORT"
-    ]
+    passports = [e for e in entities if e.pii_type == "PASSPORT"]
 
     assert len(passports) == 1
-
-    e = passports[0]
-
-    assert e.value == passport
-    assert block.text[e.start:e.end] == passport
+    assert passports[0].value == passport
+    assert block.text[passports[0].start:passports[0].end] == passport
 
 
 @pytest.mark.parametrize("text", [
@@ -264,18 +288,17 @@ def test_passport_formats(passport):
     "AB1#234567",
 ])
 def test_invalid_passport_not_detected(text):
+    """Reject passport candidates that do not match supported formats."""
+
     entities = detect([make(text)])
 
-    passports = [
-        e for e in entities
-        if e.pii_type == "PASSPORT"
-    ]
+    passports = [e for e in entities if e.pii_type == "PASSPORT"]
 
     assert passports == []
 
 
 # =========================================================
-# DOB TESTS
+# DATE OF BIRTH (DOB) TESTS
 # =========================================================
 
 @pytest.mark.parametrize("text, expected_date", [
@@ -289,23 +312,18 @@ def test_invalid_passport_not_detected(text):
     ("D.O.B: 14-Jul-1981", "14-Jul-1981"),
 ])
 def test_dob_formats(text, expected_date):
+    """Detect supported date formats when a birth-related label is present."""
+
     block = make(text)
 
     entities = detect([block])
-
     dobs = [e for e in entities if e.pii_type == "DOB"]
 
     assert len(dobs) == 1
+    assert dobs[0].value == expected_date
 
-    e = dobs[0]
-
-    # The entity value should contain only the date,
-    # not the "DOB:" or "Date of birth:" label.
-    assert e.value == expected_date
-
-    # Verify that the stored offsets point exactly
-    # to the date inside the original text.
-    assert block.text[e.start:e.end] == expected_date
+    # The entity should cover only the date, not the DOB label.
+    assert block.text[dobs[0].start:dobs[0].end] == expected_date
 
 
 @pytest.mark.parametrize("text", [
@@ -315,37 +333,33 @@ def test_dob_formats(text, expected_date):
     "Reborn 12/05/2026",
 ])
 def test_ordinary_date_not_detected_as_dob(text):
+    """Avoid classifying ordinary dates as DOBs without birth context."""
+
     entities = detect([make(text)])
 
     dobs = [e for e in entities if e.pii_type == "DOB"]
 
     assert dobs == []
 
+
+# =========================================================
+# PERSON TESTS
+# =========================================================
+
 def test_person_detection():
-    # Create a synthetic text block containing a person name.
-    block = TextBlock(
-        file="test.txt",
-        location="paragraph 1",
-        index=0,
-        text="John Smith joined the company."
-    )
+    """Detect a person name using the configured NLP-based detector."""
 
-    # Run the complete PII detection pipeline.
+    block = make("John Smith joined the company.")
+
     entities = detect([block])
-
-    # Keep only the entities classified as PERSON.
     persons = [e for e in entities if e.pii_type == "PERSON"]
 
-    # Exactly one person should be detected.
     assert len(persons) == 1
-
-    # Verify that the detected value is correct.
     assert persons[0].value == "John Smith"
-
-    # Verify the exact character offsets.
     assert persons[0].start == 0
     assert persons[0].end == 10
 
+<<<<<<< HEAD
 def test_all_caps_person_detection():
     block = make("PRIYA NAIR | EMP-37655 | Finance")
 
@@ -385,3 +399,59 @@ def test_indian_passport_detection():
     passports = [e for e in detect([block]) if e.pii_type == "PASSPORT"]
 
     assert [block.text[e.start:e.end] for e in passports] == ["J8369854"]
+=======
+
+# =========================================================
+# PAYMENT CARD TESTS
+# =========================================================
+
+def test_valid_payment_card():
+    """Detect a synthetic card number that passes the Luhn checksum."""
+
+    # Synthetic test card number; do not use real card data.
+    block = make("Test card: 4111111111111111")
+
+    entities = detect([block])
+    cards = [e for e in entities if e.pii_type == "PAYMENT_CARD"]
+
+    assert len(cards) == 1
+    assert cards[0].value == "4111111111111111"
+    assert block.text[cards[0].start:cards[0].end] == cards[0].value
+
+
+def test_payment_card_with_spaces():
+    """Detect a card candidate with spaces between digit groups."""
+
+    block = make("Test card: 4111 1111 1111 1111")
+
+    entities = detect([block])
+    cards = [e for e in entities if e.pii_type == "PAYMENT_CARD"]
+
+    assert len(cards) == 1
+    assert cards[0].value == "4111 1111 1111 1111"
+    assert block.text[cards[0].start:cards[0].end] == cards[0].value
+
+
+def test_payment_card_with_hyphens():
+    """Detect a card candidate with hyphens between digit groups."""
+
+    block = make("Test card: 4111-1111-1111-1111")
+
+    entities = detect([block])
+    cards = [e for e in entities if e.pii_type == "PAYMENT_CARD"]
+
+    assert len(cards) == 1
+    assert cards[0].value == "4111-1111-1111-1111"
+    assert block.text[cards[0].start:cards[0].end] == cards[0].value
+
+
+def test_invalid_luhn_number_not_detected_as_payment_card():
+    """Reject a card-shaped number that fails the Luhn checksum."""
+
+    block = make("Test number: 4111111111111112")
+
+    entities = detect([block])
+    cards = [e for e in entities if e.pii_type == "PAYMENT_CARD"]
+
+    assert cards == []
+>>>>>>> 812733788ee6e5c41146211be0f3f22420b15f84

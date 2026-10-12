@@ -1,3 +1,33 @@
+"""
+Rule-based and Presidio-based PII detection.
+
+This module detects structured PII using regular expressions and
+specialized validation, and detects person names using Presidio.
+
+Implemented detection categories:
+- Email addresses
+- Employee IDs
+- Social Security Numbers (SSNs)
+- Indian PAN identifiers
+- Project-specific passport formats
+- Payment cards validated with the Luhn checksum
+- Phone numbers validated using the phonenumbers library
+- Dates of birth identified using contextual labels
+- Person names identified using Presidio and spaCy
+
+Each detection is returned as an Entity containing its category,
+character offsets in the original text block, confidence score,
+detector identifier, and detected value.
+
+Limitations:
+- Regex formats do not cover every possible identifier format.
+- Phone validation depends on numbering-plan metadata and the
+  configured default region.
+- DOB detection depends on recognizable birth-related labels.
+- Person-name detection may produce false positives or miss names.
+- A valid Luhn checksum does not establish that a card is real.
+"""
+
 import re
 
 import phonenumbers
@@ -12,11 +42,8 @@ from pii_pipeline.schemas import TextBlock, Entity
 # PRESIDIO ANALYZER
 # =========================================================
 
-# Create the Presidio analyzer once and reuse it for all
-# text blocks instead of creating a new analyzer each time.
-#
-# Presidio uses spaCy as its NLP engine for entities such
-# as PERSON.
+# Initialize Presidio once and reuse it across text blocks.
+# Presidio uses an NLP model to identify person-name candidates.
 presidio_analyzer = AnalyzerEngine()
 
 # India recognizers ship with Presidio but are off by default.
@@ -49,10 +76,10 @@ def overlaps(entity: Entity, found: list[Entity]) -> bool:
 # EMAIL DETECTION
 # =========================================================
 
-# Match standard email addresses such as:
-# john.smith@example.com
-#
-# re.compile() converts the regex into a reusable pattern.
+# Match common email-address formats.
+# Example: john.smith@example.com
+# This pattern is practical for the project but is not a complete
+# implementation of every email format permitted by email standards.
 EMAIL = re.compile(
     r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
 )
@@ -79,19 +106,13 @@ EMPLOYEE_ID = re.compile(
 # SOCIAL SECURITY NUMBER (SSN) DETECTION
 # =========================================================
 
-# Match the SSN format observed in the sample documents:
-# 3 digits - 2 digits - 4 digits
-#
-# Example:
-# 805-52-0432
+# Match the hyphenated SSN format, such as 805-52-0432.
+# This checks the format only; it does not verify that the SSN
+# was issued or is associated with a real person.
 SSN = re.compile(
-    r"(?<![A-Za-z0-9])"  # Not immediately preceded by a letter or digit.
-    r"\d{3}"              # Exactly 3 digits.
-    r"-"                  # Hyphen.
-    r"\d{2}"              # Exactly 2 digits.
-    r"-"                  # Hyphen.
-    r"\d{4}"              # Exactly 4 digits.
-    r"(?![A-Za-z0-9])"   # Not immediately followed by a letter or digit.
+    r"(?<![A-Za-z0-9])"
+    r"\d{3}-\d{2}-\d{4}"
+    r"(?![A-Za-z0-9])"
 )
 
 
@@ -99,17 +120,14 @@ SSN = re.compile(
 # PAN DETECTION
 # =========================================================
 
-# PAN (Permanent Account Number) format:
-# 5 uppercase letters + 4 digits + 1 uppercase letter.
-#
-# Example:
-# ABCDE1234F
+# Match the expected Indian PAN structure:
+# five uppercase letters, four digits, and one uppercase letter.
+# Example: ABCDE1234F
+# This validates the format, not the actual issuance of the PAN.
 PAN = re.compile(
-    r"(?<![A-Za-z0-9])"  # Not immediately preceded by a letter or digit.
-    r"[A-Z]{5}"           # Exactly 5 uppercase letters.
-    r"\d{4}"              # Exactly 4 digits.
-    r"[A-Z]"              # Exactly 1 uppercase letter.
-    r"(?![A-Za-z0-9])"   # Not immediately followed by a letter or digit.
+    r"(?<![A-Za-z0-9])"
+    r"[A-Z]{5}\d{4}[A-Z]"
+    r"(?![A-Za-z0-9])"
 )
 
 
@@ -117,18 +135,15 @@ PAN = re.compile(
 # PASSPORT DETECTION
 # =========================================================
 
-# Match the passport-style format observed in the sample documents:
-# 2 uppercase letters + 1 digit + '#' + 5 alphanumeric characters.
-#
-# Example:
-# AB1#23456
+# Match the two passport-like formats represented in our test data:
+# 1. Two uppercase letters, one digit, '#', and five alphanumeric
+#    characters, such as AB1#23456.
+# 2. Two uppercase letters followed by seven digits, such as TK4820913.
+# These are project-specific formats, not universal passport rules.
 PASSPORT = re.compile(
-    r"(?<![A-Za-z0-9])"  # Not immediately preceded by a letter or digit.
-    r"[A-Z]{2}"           # Exactly 2 uppercase letters.
-    r"\d"                 # Exactly 1 digit.
-    r"#"                  # Literal '#' character.
-    r"[A-Z0-9]{5}"        # Exactly 5 uppercase letters or digits.
-    r"(?![A-Za-z0-9])"   # Not immediately followed by a letter or digit.
+    r"(?<![A-Za-z0-9])"
+    r"(?:[A-Z]{2}\d#[A-Z0-9]{5}|[A-Z]{2}\d{7})"
+    r"(?![A-Za-z0-9])"
 )
 
 
@@ -162,6 +177,56 @@ DOB = re.compile(
         r"[\s-]+\d{4}"  # Written date.
     r")"
 )
+
+
+# =========================================================
+# PAYMENT CARD DETECTION
+# =========================================================
+
+# Match candidate card numbers containing 13–19 digits.
+# Spaces and hyphens may separate the digits.
+# This pattern only finds candidates; passes_luhn() performs
+# a separate checksum validation before an entity is returned.
+PAYMENT_CARD = re.compile(
+    r"(?<!\d)(?:\d[ -]?){12,18}\d(?!\d)"
+)
+
+
+def passes_luhn(number: str) -> bool:
+    """
+    Validate a numeric candidate using the Luhn checksum.
+
+    Formatting characters are ignored when extracting digits.
+    The function checks the candidate's length and checksum.
+    It does not prove that a card exists, is active, or belongs
+    to a particular person.
+    """
+
+    # Keep only digits so formatted card numbers can be validated.
+    digits = [int(char) for char in number if char.isdigit()]
+
+    # Payment-card candidates must contain between 13 and 19 digits.
+    if not 13 <= len(digits) <= 19:
+        return False
+
+    checksum = 0
+
+    # Process digits from right to left, as required by the Luhn
+    # algorithm. Every second digit, starting with the second
+    # digit from the right, is doubled.
+    for position, digit in enumerate(reversed(digits)):
+        if position % 2 == 1:
+            digit *= 2
+
+            # Subtracting 9 from a doubled digit greater than 9
+            # is equivalent to adding the digits of that result.
+            if digit > 9:
+                digit -= 9
+
+        checksum += digit
+
+    # A valid Luhn checksum produces a sum divisible by 10.
+    return checksum % 10 == 0
 
 
 # =========================================================
@@ -224,7 +289,6 @@ def find_phones(block: TextBlock, regions: tuple[str, ...] = ("US", "IN")) -> li
             if not overlaps(entity, found):
                 found.append(entity)
 
-    # Return every valid phone entity found in the block.
     return found
 
 
@@ -233,40 +297,22 @@ def find_phones(block: TextBlock, regions: tuple[str, ...] = ("US", "IN")) -> li
 # =========================================================
 
 def find_dobs(block: TextBlock) -> list[Entity]:
-    """
-    Find dates of birth inside a TextBlock.
+    """Find dates associated with DOB, Date of Birth, or Born labels."""
 
-    The detector uses contextual labels such as:
-        "Date of birth:"
-        "DOB:"
-        "Born:"
-
-    Only the actual date is returned as the Entity value.
-    """
-
-    # Store all DOB entities found in this text block.
     found = []
 
-    # Search the block for a birth-related label followed by a date.
+    # finditer() provides each match and its position in the original text.
     for match in DOB.finditer(block.text):
 
-        # Group 1 contains only the actual date,
-        # not the "DOB:" or "Date of birth:" label.
+        # Group 1 contains only the date, excluding the contextual label.
         date = match.group(1)
 
-        # Find the exact starting character position of the date.
-        start = match.start(1)
-
-        # Find the exact ending character position of the date.
-        end = match.end(1)
-
-        # Create an Entity containing only the date.
         found.append(
             Entity(
                 file=block.file,
                 block_index=block.index,
-                start=start,
-                end=end,
+                start=match.start(1),
+                end=match.end(1),
                 pii_type="DOB",
                 confidence=0.95,
                 detector="regex.dob",
@@ -274,7 +320,6 @@ def find_dobs(block: TextBlock) -> list[Entity]:
             )
         )
 
-    # Return all DOB entities found in the block.
     return found
 
 
@@ -287,8 +332,9 @@ def find_presidio(block: TextBlock) -> list[Entity]:
     Detect person names (Presidio + spaCy NER) and Indian
     government IDs (Presidio's Aadhaar and passport recognizers).
 
-    Presidio performs the PII analysis while spaCy provides
-    the underlying NLP/NER capabilities.
+    The returned offsets refer to the original text block.
+    NLP-based detection is heuristic, so predictions may need
+    evaluation for false positives and missed names.
     """
 
     text = block.text
@@ -331,26 +377,21 @@ def find_presidio(block: TextBlock) -> list[Entity]:
             if not overlaps(entity, found):
                 found.append(entity)
 
-    # IMPORTANT:
-    # Return the list so find_patterns() can add these entities
-    # to the overall detection result.
     return found
 
 
 # =========================================================
-# GENERAL PATTERN DETECTION
+# GENERAL REGEX DETECTION
 # =========================================================
 
-# List of regex-based PII detectors.
+# Each tuple contains:
+# 1. The compiled regular expression.
+# 2. The PII category assigned to matches.
+# 3. The configured confidence score.
+# 4. An identifier describing the detection method.
 #
-# Each entry contains:
-#   1. The regex pattern.
-#   2. The PII type.
-#   3. The confidence assigned to the detection.
-#   4. The detector name.
-#
-# DOB is intentionally NOT included here because its regex
-# uses surrounding context and captures only part of the match.
+# DOB and PAYMENT_CARD are handled separately because they require
+# contextual matching or checksum validation.
 PATTERNS = [
     (EMAIL, "EMAIL", 0.90, "regex.email"),
     (EMPLOYEE_ID, "EMPLOYEE_ID", 0.95, "regex.employee_id"),
@@ -362,28 +403,30 @@ PATTERNS = [
 
 def find_patterns(block: TextBlock) -> list[Entity]:
     """
-    Run all currently implemented PII detectors on a TextBlock.
+    Run the implemented PII detectors on one TextBlock.
 
     This combines:
-        - Regex-based structured PII detection
-        - libphonenumber phone detection
-        - Contextual DOB detection
-        - Presidio + spaCy PERSON detection
+    1. Regular-expression detectors for structured identifiers.
+    2. Payment-card candidate detection with Luhn validation.
+    3. Phone-number detection and validation.
+    4. Contextual date-of-birth detection.
+    5. Presidio-based person-name detection.
+
+    Each Entity retains offsets into the original block text.
+    Results from different detectors may overlap; deduplication
+    and overlap handling are responsibilities of the integration
+    and redaction stages.
     """
 
-    # Store every entity detected in this block.
     found = []
 
     # ---------------------------------------------------------
-    # 1. Regex-based detectors
+    # 1. Existing regex-based detectors
     # ---------------------------------------------------------
 
+    # Find every match for each configured structured-PII pattern.
     for regex, pii_type, confidence, detector in PATTERNS:
-
-        # Find every occurrence of the current pattern.
         for match in regex.finditer(block.text):
-
-            # Convert the regex match into our standard Entity schema.
             found.append(
                 Entity(
                     file=block.file,
@@ -398,19 +441,46 @@ def find_patterns(block: TextBlock) -> list[Entity]:
             )
 
     # ---------------------------------------------------------
-    # 2. Phone-number detection
+    # 2. Payment-card detection
     # ---------------------------------------------------------
 
-    # Use libphonenumber because phone numbers have many
-    # different country-specific formats.
+    for match in PAYMENT_CARD.finditer(block.text):
+
+        # Remove spaces and hyphens for checksum validation.
+        # The Entity below still retains the original formatted value
+        # and original character offsets.
+        card_number = re.sub(r"[ -]", "", match.group())
+
+        # Reject candidates that fail the Luhn checksum.
+        if not passes_luhn(card_number):
+            continue
+
+        found.append(
+            Entity(
+                file=block.file,
+                block_index=block.index,
+                start=match.start(),
+                end=match.end(),
+                pii_type="PAYMENT_CARD",
+                confidence=0.95,
+                detector="regex.luhn",
+                value=match.group(),
+            )
+        )
+
+    # ---------------------------------------------------------
+    # 3. Phone-number detection
+    # ---------------------------------------------------------
+
+    # Use the specialized library instead of relying on a broad
+    # regular expression to identify phone-number formats.
     found.extend(find_phones(block))
 
     # ---------------------------------------------------------
-    # 3. Date-of-birth detection
+    # 4. Contextual DOB detection
     # ---------------------------------------------------------
 
-    # Use contextual matching because an ordinary date should
-    # not automatically be classified as DOB.
+    # Only dates following recognized birth-related labels are matched.
     found.extend(find_dobs(block))
 
     # ---------------------------------------------------------
@@ -420,5 +490,4 @@ def find_patterns(block: TextBlock) -> list[Entity]:
     # Use Presidio: spaCy NER for names, checksum/context rules for IDs.
     found.extend(find_presidio(block))
 
-    # Return every detected PII entity from this block.
     return found
