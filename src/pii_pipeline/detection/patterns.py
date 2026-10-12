@@ -1,8 +1,9 @@
 import re
 
 import phonenumbers
-from phonenumbers import PhoneNumberMatcher
+from phonenumbers import PhoneNumberMatcher, PhoneNumberType
 from presidio_analyzer import AnalyzerEngine
+from presidio_analyzer.predefined_recognizers import InAadhaarRecognizer, InPassportRecognizer
 
 from pii_pipeline.schemas import TextBlock, Entity
 
@@ -17,6 +18,31 @@ from pii_pipeline.schemas import TextBlock, Entity
 # Presidio uses spaCy as its NLP engine for entities such
 # as PERSON.
 presidio_analyzer = AnalyzerEngine()
+
+# India recognizers ship with Presidio but are off by default.
+# Aadhaar is checksum-validated; passport scores low unless a
+# context word like "passport" is nearby.
+presidio_analyzer.registry.add_recognizer(InAadhaarRecognizer())
+presidio_analyzer.registry.add_recognizer(InPassportRecognizer())
+
+# Presidio entity name -> our pii_type.
+PRESIDIO_TYPES = {
+    "PERSON": "PERSON",
+    "IN_AADHAAR": "AADHAAR",
+    "IN_PASSPORT": "PASSPORT",
+}
+
+# Two all-caps words in a row, e.g. "PRIYA NAIR". spaCy misses
+# names written like this, so such blocks get a second pass.
+CAPS_RUN = re.compile(r"\b[A-Z]{2,}\s+[A-Z]{2,}\b")
+
+
+def overlaps(entity: Entity, found: list[Entity]) -> bool:
+    """True if `entity` overlaps a span of the same type already in `found`."""
+    return any(
+        e.pii_type == entity.pii_type and e.start < entity.end and entity.start < e.end
+        for e in found
+    )
 
 
 # =========================================================
@@ -39,15 +65,12 @@ EMAIL = re.compile(
 # Employee IDs follow the observed format:
 # EMP- followed by exactly 5 digits.
 #
-# Parentheses may optionally surround the entire ID:
-# EMP-37655
-# (EMP-37655)
+# Surrounding parentheses stay outside the span, so
+# "(EMP-37655)" yields "EMP-37655".
 EMPLOYEE_ID = re.compile(
     r"(?<![A-Za-z0-9])"  # Not immediately preceded by a letter or digit.
-    r"\(?"               # Optional opening parenthesis.
     r"EMP-"              # Required EMP- prefix.
     r"\d{5}"             # Exactly 5 digits.
-    r"\)?"               # Optional closing parenthesis.
     r"(?![A-Za-z0-9])"   # Not immediately followed by a letter or digit.
 )
 
@@ -119,21 +142,24 @@ PASSPORT = re.compile(
 # Date of birth: 14 July 1981
 # DATE OF BIRTH: 05/12/1990
 # DOB: 23-08-1985
-# Born: 7 March 2001
+# D.O.B: 1985-08-23
+# Born on 7 March 2001
+# DOB: 14-Jul-1981
 #
 # The surrounding label provides the context that tells us
 # that the date represents a person's date of birth.
 DOB = re.compile(
     r"(?i)"  # Make the pattern case-insensitive.
-    r"(?:date\s+of\s+birth|dob|born)"  # Birth-related label.
+    r"\b(?:date\s+of\s+birth|d\.?o\.?b\.?|born(?:\s+on)?)\b"  # Birth-related label, whole words only.
     r"\s*[:\-]?\s*"  # Optional spaces and ':' or '-'.
     r"("  # Capture only the actual date.
         r"\d{1,2}[/-]\d{1,2}[/-]\d{2,4}"  # Numeric date.
         r"|"
-        r"\d{1,2}\s+"
-        r"(?:January|February|March|April|May|June|July|August|"
-        r"September|October|November|December)"
-        r"\s+\d{4}"  # Written date.
+        r"\d{4}-\d{2}-\d{2}"  # ISO date.
+        r"|"
+        r"\d{1,2}[\s-]+"
+        r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?"  # Full or short month.
+        r"[\s-]+\d{4}"  # Written date.
     r")"
 )
 
@@ -142,7 +168,10 @@ DOB = re.compile(
 # PHONE NUMBER DETECTION
 # =========================================================
 
-def find_phones(block: TextBlock, region: str = "US") -> list[Entity]:
+INDIAN_MOBILE = (PhoneNumberType.MOBILE, PhoneNumberType.FIXED_LINE_OR_MOBILE)
+
+
+def find_phones(block: TextBlock, regions: tuple[str, ...] = ("US", "IN")) -> list[Entity]:
     """
     Find valid phone numbers inside a TextBlock.
 
@@ -151,8 +180,9 @@ def find_phones(block: TextBlock, region: str = "US") -> list[Entity]:
 
     Args:
         block: TextBlock containing the text to analyze.
-        region: Default country/region used when a number does
-                not contain an explicit country code.
+        regions: Countries tried, in order, for numbers without
+                 an explicit country code. The documents mix US
+                 and Indian numbers.
 
     Returns:
         A list of detected phone-number entities.
@@ -161,21 +191,25 @@ def find_phones(block: TextBlock, region: str = "US") -> list[Entity]:
     # Store all valid phone-number entities found in this block.
     found = []
 
-    # Search the entire text for phone-number candidates.
-    #
-    # PhoneNumberMatcher identifies phone-like candidates,
-    # but a candidate is not necessarily a valid phone number.
-    for match in PhoneNumberMatcher(block.text, region):
+    for region in regions:
 
-        # Validate the candidate using Google's libphonenumber
-        # data through the phonenumbers Python library.
-        if not phonenumbers.is_valid_number(match.number):
-            continue
+        # PhoneNumberMatcher identifies phone-like candidates,
+        # but a candidate is not necessarily a valid phone number.
+        for match in PhoneNumberMatcher(block.text, region):
 
-        # Convert the validated phone number into our standard
-        # Entity format.
-        found.append(
-            Entity(
+            if not phonenumbers.is_valid_number(match.number):
+                continue
+
+            # Almost any 10 digits is a valid Indian landline, so without
+            # a leading 0 accept only mobiles: "1234567890" is not a phone.
+            if (
+                region == "IN"
+                and not match.raw_string.startswith("0")
+                and phonenumbers.number_type(match.number) not in INDIAN_MOBILE
+            ):
+                continue
+
+            entity = Entity(
                 file=block.file,
                 block_index=block.index,
                 start=match.start,
@@ -185,7 +219,10 @@ def find_phones(block: TextBlock, region: str = "US") -> list[Entity]:
                 detector="libphonenumber",
                 value=match.raw_string,
             )
-        )
+
+            # A number with a country code is found once per region.
+            if not overlaps(entity, found):
+                found.append(entity)
 
     # Return every valid phone entity found in the block.
     return found
@@ -245,42 +282,54 @@ def find_dobs(block: TextBlock) -> list[Entity]:
 # PERSON DETECTION
 # =========================================================
 
-def find_persons(block: TextBlock) -> list[Entity]:
+def find_presidio(block: TextBlock) -> list[Entity]:
     """
-    Detect person names using Presidio + spaCy NER.
+    Detect person names (Presidio + spaCy NER) and Indian
+    government IDs (Presidio's Aadhaar and passport recognizers).
 
     Presidio performs the PII analysis while spaCy provides
     the underlying NLP/NER capabilities.
     """
 
-    # Store all PERSON entities detected in this text block.
+    text = block.text
+
+    # Store all entities detected in this text block.
     found = []
 
-    # Ask Presidio to analyze the text specifically for PERSON
-    # entities.
-    results = presidio_analyzer.analyze(
-        text=block.text,
-        language="en",
-        entities=["PERSON"],
-    )
+    # spaCy relies on capitalisation, so "PRIYA NAIR" is missed.
+    # Title-casing keeps every offset when the length is unchanged.
+    passes = [text]
+    titled = text.title()
+    if CAPS_RUN.search(text) and len(titled) == len(text):
+        passes.append(titled)
 
-    # Process every PERSON entity detected by Presidio.
-    for result in results:
+    for i, analyzed in enumerate(passes):
+        results = presidio_analyzer.analyze(
+            text=analyzed,
+            language="en",
+            entities=list(PRESIDIO_TYPES),
+        )
 
-        # Convert Presidio's result into our project's
-        # standardized Entity schema.
-        found.append(
-            Entity(
+        for result in results:
+            span = text[result.start:result.end]
+
+            # From the title-cased pass keep only all-caps spans;
+            # elsewhere it would invent names from capitalised words.
+            if i == 1 and not span.isupper():
+                continue
+
+            entity = Entity(
                 file=block.file,
                 block_index=block.index,
                 start=result.start,
                 end=result.end,
-                pii_type="PERSON",
+                pii_type=PRESIDIO_TYPES[result.entity_type],
                 confidence=result.score,
-                detector="presidio.spacy",
-                value=block.text[result.start:result.end],
+                detector="presidio",
+                value=span,
             )
-        )
+            if not overlaps(entity, found):
+                found.append(entity)
 
     # IMPORTANT:
     # Return the list so find_patterns() can add these entities
@@ -365,11 +414,11 @@ def find_patterns(block: TextBlock) -> list[Entity]:
     found.extend(find_dobs(block))
 
     # ---------------------------------------------------------
-    # 4. Person-name detection
+    # 4. Person names and Indian government IDs
     # ---------------------------------------------------------
 
-    # Use Presidio + spaCy NER for unstructured person names.
-    found.extend(find_persons(block))
+    # Use Presidio: spaCy NER for names, checksum/context rules for IDs.
+    found.extend(find_presidio(block))
 
     # Return every detected PII entity from this block.
     return found

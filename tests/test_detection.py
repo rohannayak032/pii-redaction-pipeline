@@ -61,6 +61,10 @@ def test_no_email_no_result():
     "+91 98765 43210",
     "+91-9876543210",
     "+44 20 7946 0958",
+    # Indian numbers without +91.
+    "98765 43210",
+    "9876543210",
+    "022 2345 6789",
 ])
 def test_phone_formats(phone):
     block = make(f"Call {phone} now")
@@ -115,13 +119,14 @@ def test_does_not_detect_date_as_phone():
 # EMPLOYEE ID TESTS
 # =========================================================
 
-@pytest.mark.parametrize("employee_id", [
-    "EMP-37655",
-    "EMP-38104",
-    "(EMP-37655)",
+@pytest.mark.parametrize("employee_id, text", [
+    ("EMP-37655", "Employee ID: EMP-37655"),
+    ("EMP-38104", "Employee ID: EMP-38104"),
+    # Parentheses stay outside the span.
+    ("EMP-37655", "Employee ID: (EMP-37655)"),
 ])
-def test_employee_id_formats(employee_id):
-    block = make(f"Employee ID: {employee_id}")
+def test_employee_id_formats(employee_id, text):
+    block = make(text)
 
     entities = detect([block])
 
@@ -279,6 +284,9 @@ def test_invalid_passport_not_detected(text):
     ("DOB: 23-08-1985", "23-08-1985"),
     ("dob - 7 March 2001", "7 March 2001"),
     ("Born: 12/10/1995", "12/10/1995"),
+    ("Born on 7 March 2001", "7 March 2001"),
+    ("DOB: 1985-08-23", "1985-08-23"),
+    ("D.O.B: 14-Jul-1981", "14-Jul-1981"),
 ])
 def test_dob_formats(text, expected_date):
     block = make(text)
@@ -304,6 +312,7 @@ def test_dob_formats(text, expected_date):
     "The document was created on 14 July 1981.",
     "The meeting is scheduled for 05/12/2026.",
     "Policy effective date: 23-08-2026.",
+    "Reborn 12/05/2026",
 ])
 def test_ordinary_date_not_detected_as_dob(text):
     entities = detect([make(text)])
@@ -336,3 +345,43 @@ def test_person_detection():
     # Verify the exact character offsets.
     assert persons[0].start == 0
     assert persons[0].end == 10
+
+def test_all_caps_person_detection():
+    block = make("PRIYA NAIR | EMP-37655 | Finance")
+
+    persons = [e for e in detect([block]) if e.pii_type == "PERSON"]
+
+    assert [block.text[e.start:e.end] for e in persons] == ["PRIYA NAIR"]
+
+
+def test_job_title_not_detected_as_person():
+    entities = detect([make("Contact the Sales Director for details")])
+
+    assert [e for e in entities if e.pii_type == "PERSON"] == []
+
+
+# =========================================================
+# INDIAN GOVERNMENT ID TESTS (Presidio recognizers)
+# =========================================================
+
+def test_aadhaar_detection():
+    # Fake number that passes the Aadhaar (Verhoeff) checksum.
+    block = make("Aadhaar: 2345 6789 0124")
+
+    aadhaars = [e for e in detect([block]) if e.pii_type == "AADHAAR"]
+
+    assert [block.text[e.start:e.end] for e in aadhaars] == ["2345 6789 0124"]
+
+
+def test_aadhaar_checksum_failure_not_detected():
+    entities = detect([make("Aadhaar: 2345 6789 0123")])
+
+    assert [e for e in entities if e.pii_type == "AADHAAR"] == []
+
+
+def test_indian_passport_detection():
+    block = make("Passport no. J8369854")
+
+    passports = [e for e in detect([block]) if e.pii_type == "PASSPORT"]
+
+    assert [block.text[e.start:e.end] for e in passports] == ["J8369854"]
