@@ -22,5 +22,5 @@ protobuf          # GLiNER's DeBERTa tokenizer fails to load without it
 faker
 phonenumbers
 transformers      # Indian address NER models (ModernBERT / TinyBERT)
-pandas
+pandas            # also used by evaluation (evaluate_redaction.py)
 pyarrow           # reads the indian-addresses-gold parquet file

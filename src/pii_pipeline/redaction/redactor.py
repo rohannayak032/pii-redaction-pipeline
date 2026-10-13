@@ -168,6 +168,12 @@ def redact_block(
             f"block_index={block.index}: " + " ".join(result.failures)
         )
 
+    # schemas.Entity.placeholder is "filled in by redaction"; set only once verification passed.
+    for entity in validated:
+        entity.placeholder = next(
+            r.placeholder for r in records if r.start <= entity.start and entity.end <= r.end
+        )
+
     redacted = RedactedBlock(
         file=block.file,
         block_index=block.index,

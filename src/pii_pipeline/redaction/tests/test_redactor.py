@@ -136,13 +136,33 @@ def test_unicode_text():
     assert redacted.text == "Привет, [PERSON_1]! 你好 [PERSON_2] 😀 [EMAIL_1]"
 
 
-def test_inputs_are_not_mutated():
+def test_inputs_are_not_mutated_except_entity_placeholder():
     block = make_block("Contact John Smith at john@example.test")
     entities = [make_entity(block, "John Smith"), make_entity(block, "john@example.test", "EMAIL")]
     block_copy, entities_copy = copy.deepcopy(block), copy.deepcopy(entities)
     redact_block(block, entities)
     assert block == block_copy
+    assert [e.placeholder for e in entities] == ["[PERSON_1]", "[EMAIL_1]"]
+    for entity in entities:
+        entity.placeholder = None
     assert entities == entities_copy
+
+
+def test_overlapping_entities_get_the_merged_placeholder():
+    block = make_block("Hi Alex Morgan")
+    entities = [make_entity(block, "Alex Morgan"), make_entity(block, "Morgan", confidence=0.5)]
+    redact_block(block, entities)
+    assert [e.placeholder for e in entities] == ["[PERSON_1]", "[PERSON_1]"]
+
+
+def test_failed_validation_leaves_placeholders_unset():
+    block = make_block("Hi Alex Morgan")
+    good = make_entity(block, "Alex Morgan")
+    bad = span_entity(block, 0, 2)
+    bad.value = "no"
+    with pytest.raises(InvalidEntityError):
+        redact_block(block, [good, bad])
+    assert good.placeholder is None
 
 
 def test_results_are_deterministic_and_independent_of_entity_order():
