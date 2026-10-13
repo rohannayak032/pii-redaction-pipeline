@@ -41,6 +41,13 @@ def test_cell_spans_point_at_values(extracted):
     assert [row.text[s:e] for _, s, e in meta.cells] == [f.EMP_1, f.PERSON_BODY, "Finance"]
 
 
+def test_body_blocks_have_pages_headers_do_not(extracted):
+    r = extracted("docx")
+    [row] = find(r, f.EMP_1)
+    assert r.meta[row.index].page == 1
+    assert all(r.meta[b.index].page is None for b in r.blocks if "header" in b.location)
+
+
 def test_text_box_once_despite_fallback_copy(extracted):
     r = extracted("docx")
     hits = assert_found(r, f.PERSON_TEXTBOX, "text box 1")

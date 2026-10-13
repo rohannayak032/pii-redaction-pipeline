@@ -1,8 +1,10 @@
 """Unit tests for the shared building blocks (no files, no OCR)."""
 
 import pytest
+from lxml import etree
 
 from pii_pipeline.extraction.base import BlockMeta, Piece, RawBlock
+from pii_pipeline.extraction.docx_extract.body import page_map
 from pii_pipeline.extraction.deduplication import final_pass, iou
 from pii_pipeline.extraction.normalize import clean
 from pii_pipeline.extraction.ordering import xy_cut
@@ -109,3 +111,44 @@ def test_flagged_header_over_empty_rows_is_not_lost():
     rows = [_row("Jane Roe", "SSN 900-12-3456"), _row("", "")]
     [block] = table_blocks(rows, location="table 1", table_id=1, flagged_header_rows=1)
     assert render(block.pieces)[0] == "Jane Roe | SSN 900-12-3456"
+
+
+# ---------------------------------------------------------------- docx pages
+def _docx_body(xml: str):
+    w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    return etree.fromstring(f'<w:body xmlns:w="{w}">{xml}</w:body>')
+
+
+def _p(text: str, before: str = "", ppr: str = "") -> str:
+    return f"<w:p><w:pPr>{ppr}</w:pPr><w:r>{before}<w:t>{text}</w:t></w:r></w:p>"
+
+
+def _cell(*paragraphs: str) -> str:
+    return "<w:tc>" + "".join(paragraphs) + "</w:tc>"
+
+
+def test_docx_pages_from_rendered_breaks_rows_and_sections():
+    brk = "<w:lastRenderedPageBreak/>"
+    body = _docx_body(
+        _p("one") + _p("two", brk)
+        + "<w:tbl>"
+        + "<w:tr>" + _cell(_p("a")) + _cell(_p("b"), _p("b2", brk)) + "</w:tr>"  # row splits onto page 3
+        + "<w:tr>" + _cell(_p("c", brk)) + "</w:tr>"   # Word repeats the split's break here
+        + "<w:tr>" + _cell(_p("d", brk)) + "</w:tr>"   # a real new page
+        + "</w:tbl>"
+        + _p("section end", ppr="<w:sectPr/>") + _p("next section") + "<w:sectPr/>"  # nextPage by default
+    )
+    pages = page_map(body)
+    assert [pages[p] for p in body.findall("{*}p")] == [1, 2, 4, 5]
+    assert [pages[r] for r in body.findall("{*}tbl/{*}tr")] == [2, 3, 4]
+
+
+def test_docx_pages_fall_back_to_explicit_breaks():
+    continuous = '<w:sectPr><w:type w:val="continuous"/></w:sectPr>'
+    body = _docx_body(
+        '<w:p><w:r><w:t>a</w:t><w:br w:type="page"/><w:t>b</w:t></w:r></w:p>'
+        + _p("c") + _p("d", ppr="<w:pageBreakBefore/>")
+        + _p("e", ppr=continuous) + _p("f") + continuous
+    )
+    pages = page_map(body)
+    assert [pages[p] for p in body.findall("{*}p")] == [1, 2, 3, 3, 3]

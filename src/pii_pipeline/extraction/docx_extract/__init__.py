@@ -15,7 +15,7 @@ from ..base import Context, RawBlock
 from ..metadata import ooxml_properties
 from ..ooxml import Consumed, count_embedded, link_sweep, sweep
 from ..validation import UNSUPPORTED_OBJECT
-from .body import BodyWalker
+from .body import BodyWalker, page_map
 from .drawings import Counters
 from .parts import comment_blocks, header_footer_blocks, note_blocks
 
@@ -34,6 +34,7 @@ def extract_docx(path: Path, ctx: Context) -> list[RawBlock]:
     consumed = Consumed()
     counters = Counters()
     walker = BodyWalker(ctx, consumed, _style_names(document), counters)
+    walker.pages = page_map(document.element.body)
 
     blocks = walker.container(document.element.body, document.part)
     blocks += header_footer_blocks(document, walker)

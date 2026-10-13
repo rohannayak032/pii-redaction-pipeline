@@ -50,12 +50,96 @@ def _on(value) -> bool:
     return value is not None and value.get(f"{_W}val", "true") not in ("false", "0", "off")
 
 
+W_T, W_BR, W_PAGE_BEFORE = q("w", "t"), q("w", "br"), q("w", "pageBreakBefore")
+W_RENDERED_BREAK, W_TXBX, MC_FALLBACK = q("w", "lastRenderedPageBreak"), q("w", "txbxContent"), q("mc", "Fallback")
+W_SECT, W_SECT_TYPE, W_PPR = q("w", "sectPr"), q("w", "type"), q("w", "pPr")
+W_PG_SIZE, W_PG_MAR = q("w", "pgSz"), q("w", "pgMar")
+
+
+def page_map(body: etree._Element) -> dict[etree._Element, int]:
+    """1-based start page of every body paragraph and table row.
+
+    DOCX stores no pages. Word saves where its last layout broke pages
+    (``w:lastRenderedPageBreak``); without those, only explicit breaks count.
+    Word writes no marker where a section starts on a new page, so those are
+    added from the section properties. Table cells advance in parallel: Word
+    marks a row starting a page in its first cell only, a row split across
+    pages in each overflowing cell.
+    """
+    rendered = next(body.iter(W_RENDERED_BREAK), None) is not None
+    pages: dict[etree._Element, int] = {}
+    # A paragraph-level sectPr ends its section; the *next* sectPr's type says how the following one starts.
+    sections = [s for s in body.iter(W_SECT) if s.getparent() is body or s.getparent().tag == W_PPR]
+    section_ends = {s.getparent().getparent() for s, nxt in zip(sections, sections[1:]) if _new_page(s, nxt)}
+
+    def is_break(n: etree._Element) -> bool:
+        if rendered:
+            return n.tag == W_RENDERED_BREAK
+        return (n.tag == W_BR and n.get(f"{_W}type") == "page") or (n.tag == W_PAGE_BEFORE and _on(n))
+
+    # Each walker returns (page where its first text sits or None, page after it).
+    def paragraph(p, page):
+        first = None
+        for n in p.iter(W_T, W_BR, W_PAGE_BEFORE, W_RENDERED_BREAK):
+            if _in_other_layer(n, p):
+                continue
+            if n.tag == W_T:
+                first = page if first is None else first
+            elif is_break(n):
+                page += 1
+        pages[p] = page if first is None else first
+        return first, page + (p in section_ends)
+
+    def container(el, page):
+        first = None
+        for child in _block_children(el):
+            start, page = (paragraph if child.tag == W_P else table)(child, page)
+            first = start if first is None else first
+        return first, page
+
+    def table(tbl, page):
+        first, split = None, False
+        for tr in _children(tbl, W_TR):
+            spans = [container(tc, page) for tc in _children(tr, W_TC)] or [(None, page)]
+            lead = (spans[0][0] or page) - page  # markers before the first cell's text
+            # After a split row Word repeats that same break at the next row's start.
+            start = page if split else page + lead
+            end = start + max(e - (s or page) for s, e in spans)
+            pages[tr], split, page = start, end > start, end
+            first = start if first is None else first
+        return first, page
+
+    container(body, 1)
+    return pages
+
+
+def _new_page(ending: etree._Element, following: etree._Element) -> bool:
+    """Does the ``following`` section start on a new page? nextPage is the default type."""
+    kind = following.find(W_SECT_TYPE)
+    if kind is None or kind.get(f"{_W}val") != "continuous":
+        return True
+    # Word also starts a new page when a continuous break changes the page size or margins.
+    setup = lambda s: [dict(e.attrib) if e is not None else None for e in (s.find(W_PG_SIZE), s.find(W_PG_MAR))]
+    return setup(ending) != setup(following)
+
+
+def _in_other_layer(node: etree._Element, stop: etree._Element) -> bool:
+    """True inside a text box or ``mc:Fallback`` copy, which don't advance the page flow."""
+    parent = node.getparent()
+    while parent is not None and parent is not stop:
+        if parent.tag in (W_TXBX, MC_FALLBACK):
+            return True
+        parent = parent.getparent()
+    return False
+
+
 class BodyWalker:
     def __init__(self, ctx: Context, consumed: Consumed, styles: dict[str, str], counters: Counters):
         self.ctx = ctx
         self.consumed = consumed
         self.styles = styles
         self.counters = counters
+        self.pages: dict[etree._Element, int] = {}  # body only; headers/footers repeat on every page
 
     # ------------------------------------------------------------------ paragraphs
     def _label(self, p: etree._Element) -> str:
@@ -95,12 +179,15 @@ class BodyWalker:
             blocks.append(RawBlock.simple(kind, location + label, text, source="xml"))
         blocks += self._links(p, owner, text, location)
         blocks += drawing_blocks(p, owner, location, self.ctx, self.consumed, self.counters)
+        for b in blocks:
+            b.page = self.pages.get(p)
         return blocks
 
     # ------------------------------------------------------------------ tables
     def table(self, tbl: etree._Element, owner, location: str) -> list[RawBlock]:
         name = part_name(owner)
         rows: list[list[Cell]] = []
+        row_pages: list[int | None] = []
         extras: dict[int, list[RawBlock]] = {}
         flagged = 0
         counting_header = True
@@ -133,6 +220,7 @@ class BodyWalker:
                         )
                 col += span
             rows.append(cells)
+            row_pages.append(self.pages.get(tr))
 
         row_blocks = table_blocks(
             rows, location=location, table_id=self.ctx.next_table_id(),
@@ -142,8 +230,11 @@ class BodyWalker:
         out: list[RawBlock] = []
         for r in range(1, len(rows) + 1):
             if r in by_row:
+                by_row[r].page = row_pages[r - 1]
                 out.append(by_row[r])
-            out.extend(extras.get(r, []))
+            for b in extras.get(r, []):
+                b.page = b.page or row_pages[r - 1]  # nested tables already carry their own row pages
+                out.append(b)
         return out
 
     # ------------------------------------------------------------------ containers
