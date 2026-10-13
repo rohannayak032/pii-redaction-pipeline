@@ -194,6 +194,7 @@ def test_model_address_across_an_id_is_dropped(monkeypatch):
     ("Chris Ott Melisa Cardozo DK Koran Erik Hansen",
      ["Chris Ott", "Melisa Cardozo", "DK Koran", "Erik Hansen"]),
     ("Lars Erik Brannstrom", ["Lars Erik Brannstrom"]),
+    ("MEASURE TARGET MEASURE OWNER", []),
     ("Business Owner", []),
     ("Contains Any Response", []),
     ("The General Counsel", []),
