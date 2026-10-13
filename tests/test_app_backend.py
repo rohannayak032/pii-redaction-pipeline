@@ -49,3 +49,11 @@ def test_undetected_repeat_is_a_leak(tmp_path, monkeypatch):
     res = P.process_document("t.docx", make_docx(tmp_path, f"Mail {EMAIL}.", f"Again {EMAIL}."))
     assert len(res.leaks) == 1 and not res.llm_ready and res.status == "warning"
     assert EMAIL not in res.leaks[0]
+
+
+def test_value_inside_a_longer_word_is_not_a_leak():
+    ann = Entity("t.docx", 0, 0, 3, "PERSON", 0.9, "stub", "Ann")
+    blocks = [P.RedactedBlock("t.docx", 0, "p1", "[PERSON_1] wrote it."), P.RedactedBlock("t.docx", 1, "p2", "Annual review.")]
+    assert P.residual_leaks([ann], blocks) == []
+    blocks.append(P.RedactedBlock("t.docx", 2, "p3", "Ask Ann."))
+    assert P.residual_leaks([ann], blocks) == ["A detected PERSON value still appears after redaction (p3)."]

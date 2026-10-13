@@ -78,10 +78,12 @@ def _timed(res: DocResult, stage: str, fn, *args):
 
 
 def residual_leaks(entities: List[Entity], redacted: List[RedactedBlock]) -> List[str]:
-    """A detected value that still appears in any redacted block (an undetected repeat)."""
+    """A detected value that still appears as a whole word in any redacted block (an undetected repeat)."""
     leaks = []
     for e in {e.value: e for e in entities if len(e.value.strip()) >= 3}.values():
-        where = next((b.location for b in redacted if e.value in b.text), None)
+        # Whole-word match like detect's name propagation: "Ann" inside "Annual" is not a leak.
+        word = re.compile(r"(?<!\w)" + re.escape(e.value) + r"(?!\w)")
+        where = next((b.location for b in redacted if word.search(b.text)), None)
         if where is not None:
             leaks.append(f"A detected {e.pii_type} value still appears after redaction ({where}).")
     return leaks
