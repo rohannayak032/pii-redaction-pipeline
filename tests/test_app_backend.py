@@ -42,6 +42,8 @@ def test_redacts_and_only_detections_carry_the_value(tmp_path, monkeypatch):
     assert view["records"][0]["placeholder"] == "[EMAIL_1]" and view["entities"][0]["placeholder"] == "[EMAIL_1]"
     assert "[EMAIL_1]" in view["redacted"][0]["text"]
     assert view["entities"][0]["value"] == EMAIL   # shown in the UI's Value column
+    assert view["detectors"]["stub"] == 1 and set(P.DETECTORS) <= set(view["detectors"])   # zeros listed too
+    assert P.view(P.process_document("x.pdf", b""), 1)["detectors"] == {}   # detection never ran
     rest = {k: v for k, v in view.items() if k != "entities"}   # records, report, redacted text feed the exports
     assert EMAIL not in json.dumps(rest) and EMAIL not in res.redacted_text()
 

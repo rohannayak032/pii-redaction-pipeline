@@ -4,8 +4,9 @@
   "description": "Runs the samples through the PII Shield UI, takes screenshots and builds data/outputs/PII_Shield_Report.docx",
   "scripts": {
     "capture": "node capture.js",
+    "address-eval": "node address_eval.js",
     "build": "node build_report.js",
-    "all": "node capture.js && node build_report.js"
+    "all": "node capture.js && node address_eval.js && node build_report.js"
   },
   "devDependencies": {
     "docx": "9.5.1",

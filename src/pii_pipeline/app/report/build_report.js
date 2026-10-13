@@ -24,9 +24,17 @@ const META = {
   gt_source: GT_SOURCE,
   gt_note: "The sample files are byte-identical (same SHA-256) to the three Cadence documents this ground truth labels, so capture.js copies its rows to data/outputs/ground_truth_samples.csv with only the file column renamed to sample.pdf / sample.docx / sample.pptx.",
 };
-const FILES = ["sample.pdf", "sample.docx", "sample.pptx"].map((f) => JSON.parse(fs.readFileSync(path.join(API, `${f}.json`), "utf8")));
+const FILES = ["sample.pdf", "sample.docx", "sample.pptx", "sample_addresses.docx"].map((f) => JSON.parse(fs.readFileSync(path.join(API, `${f}.json`), "utf8")));
 const EVAL = JSON.parse(fs.readFileSync(path.join(API, "evaluation.json"), "utf8"));
 const shots = fs.readdirSync(SHOTS).filter((f) => f.endsWith(".png"));
+// Detector C on its own held-out test set (address_eval.js); deployed model first.
+const ADDR_DIR = path.join(OUT, "address_model_eval");
+const ADDR = (fs.existsSync(ADDR_DIR) ? fs.readdirSync(ADDR_DIR).filter((f) => f.endsWith(".json")) : [])
+  .map((f) => JSON.parse(fs.readFileSync(path.join(ADDR_DIR, f), "utf8")))
+  .sort((a, b) => b.name.includes("deployed") - a.name.includes("deployed"));
+const TEST_SET = path.join(ROOT, "data", "indian_address", "test.jsonl");
+const addrTest = fs.existsSync(TEST_SET) ? fs.readFileSync(TEST_SET, "utf8").trim().split("\n").map((l) => JSON.parse(l).address !== null) : [];
+const SLUGS = [["pdf", "sample.pdf"], ["docx", "sample.docx"], ["pptx", "sample.pptx"], ["addresses", "sample_addresses.docx"]];
 
 const W = 9026;           // A4 text width in DXA with 1" margins
 const FONT = "Calibri";
@@ -105,8 +113,13 @@ const cleared = FILES.filter((f) => f.llm_ready).length;
 const leaks = FILES.reduce((a, f) => a + f.leaks.length, 0);
 const ov = EVAL.overall;
 const typeRows = (o) => Object.entries(o).map(([k, v]) => `${k} ${v}`).join(", ") || "-";
-const byName = Object.fromEntries(FILES.map((f) => [f.filename.split(".")[1], f]));
-const evalOf = Object.fromEntries(EVAL.files.map((x) => [x.file.split(".")[1], x]));
+const byName = Object.fromEntries(FILES.map((f) => [f.filename, f]));
+const evalOf = Object.fromEntries(EVAL.files.map((x) => [x.file, x]));
+const nonzero = (o) => Object.fromEntries(Object.entries(o).filter(([, v]) => v > 0));
+const zeros = (o) => Object.keys(o).filter((k) => o[k] === 0).join(", ") || "-";
+const demo = byName["sample_addresses.docx"];
+const demoAddressNer = demo.entities.filter((e) => e.detector.startsWith("address_ner")).length;
+const deployed = ADDR[0];
 // "MISSED by cause" lines of evaluation.diagnose: "  TYPE  cause  n"
 const causes = {};
 const typeCauses = {};
@@ -121,9 +134,9 @@ const zeroRecall = EVAL.per_type.filter((t) => t.support > 0 && t.tp === 0)
   .map((t) => `${t.type} (${t.support} labelled; ${(typeCauses[t.type] || []).join(", ")})`);
 const unlabelledTypes = EVAL.per_type.filter((t) => t.support === 0).map((t) => `${t.type} (${t.fp} detection)`);
 const observed = [
-  `sample.pdf was not cleared for the LLM: redaction verified all ${byName.pdf.block_count} blocks, but the residual check found ${byName.pdf.leaks.length} detected value(s) repeated in blocks where detection missed them: ${byName.pdf.leaks.join(" ")} This is the safety check working: the file's redacted text is withheld from the ZIP and .txt exports.`,
-  `sample.pdf is a scanned document: ${byName.pdf.extraction.sources.ocr || 0} of ${byName.pdf.block_count} blocks come from OCR, and ${byName.pdf.extraction.low_ocr_blocks} OCR blocks are below the ${byName.pdf.extraction.low_ocr_threshold} confidence threshold. Extraction (${secs(byName.pdf.timings.extraction)}) dominates its processing time.`,
-  `sample.docx is image-heavy: ${byName.docx.extraction.ocr_blocks} OCR blocks with mean confidence ${pct(byName.docx.extraction.mean_ocr)}, ${byName.docx.extraction.low_ocr_blocks} of them below ${byName.docx.extraction.low_ocr_threshold}. Its recall (${pct(evalOf.docx.recall)}) is the lowest of the three files. DOCX has no fixed pages, so its page count shows 0 and locations are paragraph/table positions.`,
+  `sample.pdf was not cleared for the LLM: redaction verified all ${byName["sample.pdf"].block_count} blocks, but the residual check found ${byName["sample.pdf"].leaks.length} detected value(s) repeated in blocks where detection missed them: ${byName["sample.pdf"].leaks.join(" ")} This is the safety check working: the file's redacted text is withheld from the ZIP and .txt exports.`,
+  `sample.pdf is a scanned document: ${byName["sample.pdf"].extraction.sources.ocr || 0} of ${byName["sample.pdf"].block_count} blocks come from OCR, and ${byName["sample.pdf"].extraction.low_ocr_blocks} OCR blocks are below the ${byName["sample.pdf"].extraction.low_ocr_threshold} confidence threshold. Extraction (${secs(byName["sample.pdf"].timings.extraction)}) dominates its processing time.`,
+  `sample.docx is image-heavy: ${byName["sample.docx"].extraction.ocr_blocks} OCR blocks with mean confidence ${pct(byName["sample.docx"].extraction.mean_ocr)}, ${byName["sample.docx"].extraction.low_ocr_blocks} of them below ${byName["sample.docx"].extraction.low_ocr_threshold}. Its recall (${pct(evalOf["sample.docx"].recall)}) is the lowest of the three labelled files. DOCX has no fixed pages, so its page count shows 0 and locations are paragraph/table positions.`,
   `Misses by cause (evaluation.diagnose): ${Object.entries(causes).map(([k, v]) => `${k} ${v}`).join(", ")}. "Not in extracted text" means the labelled value does not appear in the extracted text at all (for example text in an image that OCR skipped or misread); "found, wrong type or span" means a detection overlapped the value but with another type or a different span.`,
   `False positives by type: ${fpTypes.replace(/[{}']/g, "")}.`,
   `Labelled types never found: ${zeroRecall.join(", ") || "none"}.${unlabelledTypes.length ? ` Types detected but not labelled in the ground truth: ${unlabelledTypes.join(", ")}.` : ""}`,
@@ -156,7 +169,7 @@ children.push(
 
 // 1. Summary
 children.push(H1("1. Summary"));
-children.push(P(`All three sample documents were uploaded through the web application and processed by the team's real modules. No value in this document is typed by hand: every number comes from the API responses saved in data/outputs/app_results (one JSON per document, evaluation.json, exposure_report.json and findings.csv).`));
+children.push(P(`The three team samples and a synthetic Indian-address document (sample_addresses.docx, written by make_address_demo.py) were uploaded through the web application and processed by the team's real modules. No value in this document is typed by hand: every number comes from the API responses saved in data/outputs/app_results (one JSON per document, evaluation.json, exposure_report.json and findings.csv) and, for the address model, data/outputs/address_model_eval.`));
 children.push(table(["Result", "Value"], [
   ["Files processed", `${ok.length}/${FILES.length}`],
   ["Text blocks extracted", totBlocks.toLocaleString()],
@@ -188,7 +201,7 @@ children.push(table(["Stage", "Module call", "Output"], [
   ["Evaluation", "evaluation.evaluate_redaction + diagnose", "precision, recall, F1 per file and per type"],
 ], [1.3, 2.4, 2.6]));
 children.push(spacer());
-children.push(P("**Privacy rule across all stages:** the raw value of a detection (Entity.value) and the original block text stay inside the server process. API responses, the UI, the exports and this document contain only types, placeholders, offsets, locations, confidences and redacted text."));
+children.push(P("**Privacy rule across all stages:** the original block text never leaves the server process. The detected value (Entity.value) is sent to the browser only to fill the Value column of the detection tables, so screenshots of those tables show it. Trace records, the exposure report, the evaluation results and every export (JSON, CSV, ZIP, .txt) contain no raw values."));
 
 // 3. Application layer
 children.push(H1("3. Application layer (web app)"));
@@ -198,8 +211,8 @@ children.push(P("Before the integration the back-end fell back to stand-ins when
 children.push(...bullets([
   "**Removed** `mock_modules.py` (regex mock detector, pypdf/python-docx mock extractor, the \"[MOCK DATA] Jane Smith\" sample text) and `make_samples.py` (fake sample files).",
   "**Removed** the built-in fallback redactor and the name-guessing loader (`backend_config.py`): the back-end now imports and calls the real functions directly, so a missing module fails loudly instead of silently showing mock output.",
-  "**Removed** hard-coded front-end values: the format list (including .txt, which extraction does not support), MIME types, the 25 MB constant, and the file-type labels. Supported formats and the size limit now come from `/api/config`, which reads the extraction module's own extension list.",
-  "**Removed** the invented High/Medium/Low severity and risk levels (a fixed type list not produced by the pipeline), the \"Non-PII preserved\" demo proxy metric and the client-side \"show original value\" feature.",
+  "**Removed** hard-coded front-end values: the format list (including .txt, which extraction does not support), MIME types, the 25 MB constant, and the file-type labels. Supported formats (.pdf, .docx, .pptx: the extraction module's own format list) and the size limit now come from `/api/config`.",
+  "**Removed** the invented High/Medium/Low severity and risk levels (a fixed type list not produced by the pipeline), the \"Non-PII preserved\" demo proxy metric and the client-side \"show original value\" toggle, which only worked for .txt files. A Value column filled by the server replaces it.",
   "**Replaced** the app's own scoring with the team's evaluation module (`evaluate_redaction`, `diagnose`).",
   "**Fixed** the per-file \"Download .txt\" link, which used an undefined run id.",
 ]));
@@ -207,7 +220,7 @@ children.push(H2("3.2 What the UI shows (all real pipeline outputs)"));
 children.push(table(["View", "Content", "Source"], [
   ["Summary cards", "files processed, detections, redactions, cleared files, residual leaks, time", "process responses"],
   ["Overview", "per-file status, pages, blocks, detections, redactions by type, timing; charts by type and detector", "build_report summary, detect"],
-  ["Findings", "every detection: type, placeholder, confidence, detector, file, page, location, offsets; search + filters", "Entity.public_info + BlockMeta.page"],
+  ["Findings", "every detection: type, value, placeholder, confidence, detector, file, page, location, offsets; search + filters", "Entity.public_info + Entity.value + BlockMeta.page"],
   ["File details / Detected PII", "the same per file, filter by type, detector, page", "detect"],
   ["File details / Redacted Text", "redacted blocks per page/slide with highlighted placeholders, copy, download", "RedactedBlock"],
   ["File details / Extraction", "blocks by source and kind, OCR confidence, hidden blocks, table rows, coded warnings", "ExtractionResult meta + warnings"],
@@ -254,7 +267,7 @@ children.push(spacer());
 children.push(table(["File", "Extraction warnings by code"], FILES.map((f) => [f.filename, typeRows(warnCodes(f))]), [1, 4]));
 children.push(spacer());
 children.push(P("Warning codes: LOW_OCR_CONFIDENCE = OCR block below 0.6 mean confidence; SKIPPED_IMAGE = images not OCR'd (EMF/WMF, tiny, linked); PAGE_NO_TEXT = page produced no block; LOW_COVERAGE = scanned page with ink but few characters; UNCLAIMED_TEXT = text found only by the sweep; UNSUPPORTED_OBJECT = embedded OLE objects; EXTENSION_MISMATCH = content differs from the extension."));
-for (const [name, label] of [["pdf", "sample.pdf"], ["docx", "sample.docx"], ["pptx", "sample.pptx"]]) {
+for (const [name, label] of SLUGS) {
   children.push(...shot(`${name}_extraction`, `Extraction view for ${label}`));
 }
 
@@ -273,11 +286,17 @@ children.push(table(["Detector", "Finds", "How"], [
 children.push(spacer());
 children.push(P("After the detectors, detect() cleans model spans: it ignores model names in OCR blocks the extraction flags as unreliable, cuts a name where it runs into an e-mail, phone or ID, splits run-together names, trims role/table words, keeps one-word names only when two detectors agree, drops model addresses that contain a date, and removes exact duplicates."));
 children.push(H2("5.2 Results on the samples"));
-children.push(table(["File", "Detections", "By type", "By detector"],
-  FILES.map((f) => [f.filename, f.entities.length, typeRows(f.detected_types), typeRows(f.detectors)]), [1.1, 0.9, 2.2, 2.6]));
+children.push(table(["File", "Detections", "By type", "By detector", "Ran with 0 detections"],
+  FILES.map((f) => [f.filename, f.entities.length, typeRows(f.detected_types), typeRows(nonzero(f.detectors)), zeros(f.detectors)]),
+  [1.1, 0.8, 1.7, 2.1, 1.9]));
+children.push(spacer());
+children.push(P("Every detector listed by detection.detector.DETECTORS runs on every block; the last column shows the ones that found nothing in that file, so a 0 means the detector ran and found no match."));
+children.push(H2("5.3 Indian address model (Detector C)"));
+children.push(P(`The Cadence samples contain no Indian addresses, so Detector C (${deployed ? deployed.model : "address model"}) is shown in two other ways. In the demo, sample_addresses.docx (synthetic: invented houses, buildings, names and example.com e-mails in real localities and cities, no phone numbers) produced ${demoAddressNer} address_ner detection(s) and ${demo.report.summary.by_pii_type.ADDRESS || 0} [ADDRESS_n] redaction(s); see the screenshots below.`));
+if (deployed) children.push(P(`Measured on the model's own held-out test set (not on the samples, see 7.6): complete-address recall ${pct(deployed.complete_recall)}, false-positive rate ${pct(deployed.false_positive_rate)}, ${deployed.ms_per_example.toFixed(0)} ms per example on the CPU.`));
 children.push(...shot("findings", "Findings tab: every detection across the three files, searchable and filterable"));
-children.push(...shot("finding_detail", "one detection expanded: type, placeholder, confidence, detector, block, page, offsets (no value)"));
-for (const [name, label] of [["pdf", "sample.pdf"], ["docx", "sample.docx"], ["pptx", "sample.pptx"]]) {
+children.push(...shot("finding_detail", "one detection expanded: type, value, placeholder, confidence, detector, block, page, offsets"));
+for (const [name, label] of SLUGS) {
   children.push(...shot(`${name}_detected`, `Detected PII for ${label}`));
 }
 
@@ -300,7 +319,7 @@ children.push(table(["File", "Detections", "Redactions", "Merged away", "Placeho
   [1.2, 0.9, 0.9, 0.8, 0.9, 2.2, 0.9, 0.7]));
 children.push(spacer());
 children.push(P("\"Merged away\" is the number of detections that overlapped another detection and were folded into a single replacement. \"Verified blocks\" counts blocks that passed verify_redaction; redact_document returns output only if every block passes."));
-for (const [name, label] of [["pdf", "sample.pdf"], ["docx", "sample.docx"], ["pptx", "sample.pptx"]]) {
+for (const [name, label] of SLUGS) {
   children.push(...shot(`${name}_redacted`, `redacted text of ${label}, placeholders highlighted`));
   children.push(...shot(`${name}_trace`, `traceability for ${label}: verification, placeholder index, trace records`));
 }
@@ -332,7 +351,23 @@ children.push(P("A type with 0 labelled rows and only false positives (precision
 children.push(H2("7.5 Diagnosis (no values)"));
 children.push(P("Output of evaluation.diagnose: why labelled values were missed and the format (shape) of misses and false positives, with letters shown as A/a and digits as 9."));
 EVAL.diagnosis.split("\n").forEach((line) => children.push(new Paragraph({ spacing: { after: 0 }, children: [new TextRun({ text: line, font: "Consolas", size: 16 })] })));
+if (EVAL.unlabelled.length) children.push(P(`Not scored (no ground-truth rows): ${EVAL.unlabelled.join(", ")}. Its addresses are measured by the model evaluation in 7.6.`));
 children.push(...shot("evaluation", "Evaluation tab: overall metrics, per file and per type"));
+children.push(H2("7.6 Indian address model on its held-out test set (not the samples)"));
+if (!ADDR.length) {
+  children.push(P("Not run: `npm run address-eval` in src/pii_pipeline/app/report writes these results (needs data/indian_address)."));
+} else {
+  children.push(...bullets([
+    `Output of pii_pipeline.detection.address_eval on data/indian_address/test.jsonl: ${addrTest.length} examples, ${addrTest.filter(Boolean).length} with an address and ${addrTest.filter((x) => !x).length} negative sentences.`,
+    "Addresses come from gagan1985/indian-addresses-gold (Apache-2.0): 10% held out from training and placed in sentence templates never used in training. 99.8% of its labels were reviewed by an LLM, not a human, so they are silver rather than gold labels. Negative sentences mention cities, states and 6-digit numbers without being addresses; their templates are shared with training.",
+    "Complete-address recall: share of addresses whose every labelled component (house, road, locality, city, state, PIN...) lies inside a predicted ADDRESS span, i.e. nothing identifying is left after redaction. Component recall: share of all components covered. False-positive rate: share of negative sentences with any ADDRESS span. Over-redaction: predicted characters outside the true address, per address.",
+    "Latency is the mean (and 95th percentile) time per example on this machine's CPU; peak memory is the evaluation process's peak working set.",
+  ]));
+  children.push(table(["Model", "Complete recall", "Component recall", "False-positive rate", "Over-redacted chars / address", "ms / example (p95)", "Peak memory"],
+    ADDR.map((m) => [`${m.name} (${m.model})`, pct(m.complete_recall), pct(m.component_recall), pct(m.false_positive_rate),
+      m.over_redacted_chars_per_address.toFixed(2), `${m.ms_per_example.toFixed(0)} (${m.p95_ms.toFixed(0)})`, `${Math.round(m.peak_memory_mb)} MB`]),
+    [2.4, 1, 1, 1, 1.1, 1, 0.9]));
+}
 children.push(...shot("exports", "Exports tab"));
 
 // 8. Limitations

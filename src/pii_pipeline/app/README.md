@@ -40,8 +40,11 @@ With the server running and `data/sample.pdf`, `sample.docx`, `sample.pptx` in p
 ```
 cd src/pii_pipeline/app/report && npm install && npm run all
 ```
-`capture.js` drives the UI in headless Chrome (`CHROME_PATH` to override the browser), runs the evaluation and
-saves screenshots, API responses and exports to `data/outputs/`. `build_report.js` writes
+`capture.js` first writes the synthetic `data/sample_addresses.docx` (`make_address_demo.py`; add `--check` to confirm
+detection covers every address), then drives the UI in headless Chrome (`CHROME_PATH` to override the browser), runs
+the evaluation and saves screenshots, API responses and exports to `data/outputs/`. `address_eval.js` re-runs
+`detection.address_eval` on the held-out address test set (needs `data/indian_address`) for the deployed TinyBERT and
+the fine-tuned ModernBERT. `build_report.js` writes
 `data/outputs/PII_Shield_Report.docx`; every number in it is read from those saved responses.
 `data/` is git-ignored, so the outputs stay on your machine.
 

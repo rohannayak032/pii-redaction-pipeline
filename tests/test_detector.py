@@ -242,3 +242,18 @@ def test_repeats_of_a_found_name_are_redacted(monkeypatch):
                  lambda b: [span(b, "Tobias Lindqvist")] if b.index == 0 else [])
     assert [(e.block_index, e.value, e.detector) for e in result] == [
         (0, "Tobias Lindqvist", "presidio"), (1, "Tobias Lindqvist", "propagated")]
+
+
+def test_detectors_lists_every_detector_name():
+    """Every detector name written in the detection code is in DETECTORS."""
+    import re
+    from pathlib import Path
+
+    from pii_pipeline.detection import detector as detector_module
+
+    source = "".join(p.read_text(encoding="utf-8")
+                     for p in Path(detector_module.__file__).parent.glob("*.py"))
+    named = set(re.findall(r'detector="([^"]+)"', source))
+    named |= {name for *_, name in detector_module.PATTERNS}
+    assert named <= set(detector_module.DETECTORS)
+    assert any(d.startswith("address_ner:") for d in detector_module.DETECTORS)

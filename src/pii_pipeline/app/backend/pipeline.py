@@ -22,7 +22,7 @@ from functools import cached_property
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from pii_pipeline.detection.detector import detect
+from pii_pipeline.detection.detector import DETECTORS, detect
 from pii_pipeline.extraction import ExtractionError, ExtractionResult, extract_document_detailed
 from pii_pipeline.extraction.dispatcher import _EXTENSIONS
 from pii_pipeline.extraction.validation import LOW_OCR_CONFIDENCE
@@ -171,7 +171,9 @@ def view(r: DocResult, idx: int) -> Dict[str, Any]:
             "lowest_ocr": min(ocr) if ocr else None,
             "mean_ocr": sum(ocr) / len(ocr) if ocr else None,
         },
-        "detectors": dict(Counter(e.detector for e in r.entities).most_common()),
+        # every detector that ran (with 0 if it found nothing), most detections first
+        "detectors": dict(sorted({**dict.fromkeys(DETECTORS if "detection" in r.timings else (), 0),
+                                  **Counter(e.detector for e in r.entities)}.items(), key=lambda kv: -kv[1])),
         "detected_types": dict(Counter(e.pii_type for e in r.entities).most_common()),
         "entities": [dict(e.public_info(), value=e.value, n=i + 1, location=location.get(e.block_index, ""),
                           page=r.page_of(e.block_index)) for i, e in enumerate(r.entities)],

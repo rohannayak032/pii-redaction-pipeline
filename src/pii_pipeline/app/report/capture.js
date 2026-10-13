@@ -2,6 +2,7 @@
 // Start the server first (see ../README.md). Output: data/outputs/screenshots and data/outputs/app_results.
 const fs = require("fs");
 const path = require("path");
+const { execFileSync } = require("child_process");
 const puppeteer = require("puppeteer-core");
 
 const ROOT = path.resolve(__dirname, "../../../..");
@@ -15,7 +16,11 @@ fs.rmSync(SHOTS, { recursive: true, force: true });
 fs.rmSync(API, { recursive: true, force: true });
 fs.mkdirSync(SHOTS, { recursive: true });
 fs.mkdirSync(API, { recursive: true });
-const SAMPLES = ["sample.pdf", "sample.docx", "sample.pptx"].map((f) => path.join(DATA, f));
+// The three team samples plus a synthetic Indian-address document written by make_address_demo.py.
+const VENV = path.join(ROOT, ".venv", process.platform === "win32" ? "Scripts/python.exe" : "bin/python");
+execFileSync(process.env.PYTHON || (fs.existsSync(VENV) ? VENV : "python"), [path.join(__dirname, "make_address_demo.py")]);
+const SAMPLES = ["sample.pdf", "sample.docx", "sample.pptx", "sample_addresses.docx"].map((f) => path.join(DATA, f));
+const SLUGS = ["pdf", "docx", "pptx", "addresses"];   // screenshot names, in SAMPLES order
 
 // The samples are byte-identical copies of the Cadence documents the team's ground truth labels,
 // so the ground truth is reused with only its file column renamed to the sample names.
@@ -113,14 +118,13 @@ let n = 0;
   await shot("finding_detail", ".tab-panel");
 
   await clickText("button[role=tab]", "File Details");
-  const names = ["pdf", "docx", "pptx"];
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < SAMPLES.length; i++) {
     await page.select(".tab-panel select.select", String(i));
     await sleep(500);
     for (const [tab, slug] of [["Detected PII", "detected"], ["Redacted Text", "redacted"], ["Extraction", "extraction"], ["Traceability", "trace"]]) {
       await clickText(".tabs--inner button[role=tab]", tab);
       await scrollTo(".tab-panel");
-      await shot(`${names[i]}_${slug}`, ".tab-panel");
+      await shot(`${SLUGS[i]}_${slug}`, ".tab-panel");
     }
   }
 

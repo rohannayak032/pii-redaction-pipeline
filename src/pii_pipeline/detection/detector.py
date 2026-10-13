@@ -35,9 +35,19 @@ from dataclasses import replace
 
 from pii_pipeline.schemas import TextBlock, Entity
 from pii_pipeline.extraction.validation import LOW_OCR_CONFIDENCE
-from pii_pipeline.detection.patterns import find_patterns
+from pii_pipeline.detection.patterns import PATTERNS, find_patterns
 from pii_pipeline.detection.detector_b import detect_with_gliner
-from pii_pipeline.detection.detector_address import detect_indian_addresses
+from pii_pipeline.detection.detector_address import MODEL, detect_indian_addresses
+
+
+# Every Entity.detector name detect() can produce, so callers can also show
+# detectors that found nothing (tests/test_detector.py keeps it complete).
+DETECTORS = (
+    *(name for *_, name in PATTERNS),
+    "regex.luhn", "regex.last_digits", "regex.dob", "regex.phone",
+    "libphonenumber", "presidio", "gliner",
+    f"address_ner:{MODEL.split('/')[-1]}", "propagated",
+)
 
 
 # Types produced by the NER models. Everything else (regex, checksum,
