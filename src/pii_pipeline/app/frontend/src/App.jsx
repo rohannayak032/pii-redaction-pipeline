@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, correlateOriginalValues, failedStub, ALLOWED_EXTENSIONS, MAX_FILE_SIZE_MB, precheck } from "./api";
 import { EvalTab, ExportsTab, FileTab, FindingsTab, OverviewTab } from "./tabs";
-import { Alert, Metric, Tabs, ThemeSwitch, useTheme } from "./ui";
+import { Alert, BrandShield, DynamicBackground, Metric, Tabs, ThemeSwitch, ThemeTransitionBeams, useTheme } from "./ui";
 
 // ─── Format file size ─────────────────────────────────────────────────────────
 function fmtSize(bytes) {
@@ -213,16 +213,18 @@ export default function App() {
 
   return (
     <div className="app">
+      <DynamicBackground />
+      <ThemeTransitionBeams />
       {/* ── Navigation ── */}
       <header className="nav">
         <div className="nav-brand">
           <div className="brand-logo" aria-hidden="true">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-            </svg>
+            <BrandShield size={28} />
           </div>
           <div className="brand-text">
-            <span className="brand-name">PII Shield</span>
+            <span className="brand-name">
+              PII <span className="brand-name-hl">Shield</span>
+            </span>
             <span className="brand-tagline">Document Redaction Platform</span>
           </div>
         </div>

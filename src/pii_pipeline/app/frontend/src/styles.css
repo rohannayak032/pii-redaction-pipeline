@@ -219,14 +219,143 @@ code {
 .muted { color: var(--text-muted); }
 .small { font-size: 0.82rem; }
 
+/* ─── Dynamic Background (Cybersecurity Mesh & Ambient Glow) ─────────────── */
+.dynamic-bg {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  overflow: hidden;
+  background: var(--bg-page);
+  transition: background 0.3s ease;
+}
+
+.dynamic-bg-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 2;
+  opacity: 0.95;
+}
+
+/* Subtle cybernetic tech grid with spotlight vignette mask */
+.dynamic-bg-grid {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background-image: 
+    linear-gradient(to right, rgba(38, 52, 73, 0.22) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(38, 52, 73, 0.22) 1px, transparent 1px);
+  background-size: 44px 44px;
+  mask-image: radial-gradient(ellipse at 50% 30%, black 20%, transparent 80%);
+  -webkit-mask-image: radial-gradient(ellipse at 50% 30%, black 20%, transparent 80%);
+  opacity: 0.75;
+}
+
+html[data-theme="light"] .dynamic-bg-grid {
+  background-image: 
+    linear-gradient(to right, rgba(203, 213, 225, 0.5) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(203, 213, 225, 0.5) 1px, transparent 1px);
+  opacity: 0.6;
+}
+
+/* Ambient luminous glowing orbs */
+.dynamic-bg-glow {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(100px);
+  opacity: 0.16;
+  pointer-events: none;
+  z-index: 0;
+  transform: translate3d(0, 0, 0);
+  will-change: transform, opacity;
+}
+
+.glow-cyan {
+  width: 600px;
+  height: 600px;
+  background: radial-gradient(circle, var(--accent) 0%, rgba(34, 211, 238, 0) 70%);
+  top: -100px;
+  right: 5%;
+  animation: bgGlowFloatCyan 22s ease-in-out infinite alternate;
+}
+
+.glow-indigo {
+  width: 680px;
+  height: 680px;
+  background: radial-gradient(circle, var(--secondary) 0%, rgba(99, 102, 241, 0) 70%);
+  bottom: 0%;
+  left: -80px;
+  animation: bgGlowFloatIndigo 26s ease-in-out infinite alternate;
+}
+
+html[data-theme="light"] .dynamic-bg-glow {
+  opacity: 0.08;
+  filter: blur(120px);
+}
+
+@media (prefers-color-scheme: light) {
+  html:not([data-theme]) .dynamic-bg-grid {
+    background-image: 
+      linear-gradient(to right, rgba(203, 213, 225, 0.5) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(203, 213, 225, 0.5) 1px, transparent 1px);
+    opacity: 0.6;
+  }
+  html:not([data-theme]) .dynamic-bg-glow {
+    opacity: 0.08;
+    filter: blur(120px);
+  }
+}
+
+@keyframes bgGlowFloatCyan {
+  0% {
+    transform: translate(0, 0) scale(1);
+    opacity: 0.13;
+  }
+  50% {
+    transform: translate(-90px, 110px) scale(1.12);
+    opacity: 0.22;
+  }
+  100% {
+    transform: translate(70px, 70px) scale(0.96);
+    opacity: 0.14;
+  }
+}
+
+@keyframes bgGlowFloatIndigo {
+  0% {
+    transform: translate(0, 0) scale(1);
+    opacity: 0.15;
+  }
+  50% {
+    transform: translate(110px, -80px) scale(1.16);
+    opacity: 0.22;
+  }
+  100% {
+    transform: translate(-60px, -50px) scale(0.94);
+    opacity: 0.14;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dynamic-bg-glow {
+    animation: none;
+  }
+}
+
 /* ─── App Layout ──────────────────────────────────────────────────────────── */
 .app {
   display: flex;
   flex-direction: column;
   min-height: 100vh;
+  position: relative;
+  z-index: 1;
 }
 
 .main {
+  position: relative;
+  z-index: 1;
   max-width: 1120px;
   width: 100%;
   margin: 0 auto;
@@ -235,6 +364,8 @@ code {
 
 /* ─── Navigation ──────────────────────────────────────────────────────────── */
 .nav {
+  position: relative;
+  z-index: 2;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -252,16 +383,72 @@ code {
 }
 
 .brand-logo {
-  width: 42px;
-  height: 42px;
+  position: relative;
+  width: 44px;
+  height: 44px;
   border-radius: 12px;
-  background: linear-gradient(135deg, var(--accent) 0%, var(--secondary) 100%);
+  background: linear-gradient(145deg, #15243B 0%, #0C1524 100%);
+  border: 1px solid rgba(34, 211, 238, 0.35);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 1.3rem;
-  box-shadow: 0 4px 16px var(--accent-dim);
+  box-shadow: 0 4px 18px rgba(5, 10, 20, 0.55), 0 0 14px rgba(34, 211, 238, 0.16);
   flex-shrink: 0;
+  transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.22s ease, border-color 0.22s ease;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.brand-logo:hover {
+  transform: translateY(-1.5px) scale(1.03);
+  border-color: var(--accent);
+  box-shadow: 0 6px 24px rgba(5, 10, 20, 0.65), 0 0 24px rgba(34, 211, 238, 0.42);
+}
+
+/* Subtle holographic diagonal sheen on hover */
+.brand-logo::after {
+  content: "";
+  position: absolute;
+  top: -50%;
+  left: -50%;
+  width: 200%;
+  height: 200%;
+  background: linear-gradient(
+    60deg,
+    transparent 30%,
+    rgba(255, 255, 255, 0.14) 45%,
+    rgba(34, 211, 238, 0.25) 50%,
+    transparent 55%
+  );
+  transform: translateX(-100%);
+  transition: transform 0.6s ease;
+  pointer-events: none;
+}
+
+.brand-logo:hover::after {
+  transform: translateX(100%);
+}
+
+html[data-theme="light"] .brand-logo {
+  background: linear-gradient(145deg, #FFFFFF 0%, #F1F5F9 100%);
+  border-color: rgba(8, 145, 178, 0.3);
+  box-shadow: 0 4px 16px rgba(11, 18, 32, 0.08), 0 0 12px rgba(8, 145, 178, 0.12);
+}
+
+html[data-theme="light"] .brand-logo:hover {
+  border-color: var(--accent);
+  box-shadow: 0 6px 20px rgba(11, 18, 32, 0.12), 0 0 20px rgba(8, 145, 178, 0.3);
+}
+
+.brand-shield-icon {
+  width: 28px;
+  height: 28px;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.4));
+  transition: transform 0.22s ease;
+}
+
+.brand-logo:hover .brand-shield-icon {
+  transform: scale(1.06);
 }
 
 .brand-text {
@@ -272,9 +459,19 @@ code {
 
 .brand-name {
   font-weight: 800;
-  font-size: 1.25rem;
-  letter-spacing: -0.01em;
+  font-size: 1.28rem;
+  letter-spacing: -0.015em;
   color: var(--text-primary);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.brand-name-hl {
+  background: linear-gradient(90deg, var(--accent) 0%, #38BDF8 60%, var(--secondary) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
 
 .brand-tagline {
@@ -1583,3 +1780,280 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; font-size: 0.88r
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   PII Shield — Dual-Sided Theme Transition (Sides Meeting in Middle)
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* ─── View Transition API (Native Browser Snapshot Reveal) ───────────────── */
+::view-transition-group(root) {
+  animation-duration: 0.65s;
+  animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+::view-transition-image-pair(root) {
+  isolation: isolate;
+}
+
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 0.65s;
+  animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+  mix-blend-mode: normal;
+}
+
+::view-transition-old(root) {
+  /* Hold previous theme snapshot firmly underneath */
+  animation: none;
+  z-index: 1;
+}
+
+::view-transition-new(root) {
+  /* Reveal incoming theme from both left & right edges meeting at 50% center */
+  z-index: 2;
+  animation-name: themeDualSideReveal;
+  -webkit-mask-image: 
+    linear-gradient(to right, #000 calc(100% - 24px), transparent 100%),
+    linear-gradient(to left, #000 calc(100% - 24px), transparent 100%);
+  mask-image: 
+    linear-gradient(to right, #000 calc(100% - 24px), transparent 100%),
+    linear-gradient(to left, #000 calc(100% - 24px), transparent 100%);
+  -webkit-mask-repeat: no-repeat, no-repeat;
+  mask-repeat: no-repeat, no-repeat;
+  -webkit-mask-position: left center, right center;
+  mask-position: left center, right center;
+}
+
+@keyframes themeDualSideReveal {
+  0% {
+    -webkit-mask-size: 0% 100%, 0% 100%;
+    mask-size: 0% 100%, 0% 100%;
+  }
+  100% {
+    -webkit-mask-size: 52% 100%, 52% 100%;
+    mask-size: 52% 100%, 52% 100%;
+  }
+}
+
+/* ─── Visual Laser Blades & Collision Flares (Active on All Viewports) ─────── */
+.theme-sweep-container {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 99999;
+  overflow: hidden;
+}
+
+/* Fallback curtains for browsers without native View Transitions */
+.theme-curtain {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 50%;
+  pointer-events: none;
+  background-size: 40px 40px;
+}
+
+.target-light .theme-curtain {
+  background-color: #F8FAFC;
+  background-image: 
+    linear-gradient(to right, rgba(203, 213, 225, 0.4) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(203, 213, 225, 0.4) 1px, transparent 1px);
+}
+
+.target-dark .theme-curtain {
+  background-color: #0B1220;
+  background-image: 
+    linear-gradient(to right, rgba(38, 52, 73, 0.3) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(38, 52, 73, 0.3) 1px, transparent 1px);
+}
+
+.curtain-left {
+  left: 0;
+  transform: translateX(-100%);
+  animation: curtainSweepLeft 0.65s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.curtain-right {
+  right: 0;
+  transform: translateX(100%);
+  animation: curtainSweepRight 0.65s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes curtainSweepLeft {
+  0%   { transform: translateX(-100%); opacity: 1; }
+  60%  { transform: translateX(0%); opacity: 1; }
+  85%  { transform: translateX(0%); opacity: 0.95; }
+  100% { transform: translateX(0%); opacity: 0; }
+}
+
+@keyframes curtainSweepRight {
+  0%   { transform: translateX(100%); opacity: 1; }
+  60%  { transform: translateX(0%); opacity: 1; }
+  85%  { transform: translateX(0%); opacity: 0.95; }
+  100% { transform: translateX(0%); opacity: 0; }
+}
+
+/* Electric Cyan & White-Hot Laser Blades */
+.theme-laser-blade {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  pointer-events: none;
+  background: linear-gradient(180deg, #22D3EE 0%, #FFFFFF 50%, #6366F1 100%);
+}
+
+.laser-left {
+  left: 0%;
+  box-shadow: 
+    0 0 10px #22D3EE,
+    0 0 25px rgba(34, 211, 238, 0.8),
+    0 0 50px rgba(99, 102, 241, 0.55);
+  animation: laserSweepLeft 0.65s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.laser-left::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 100%;
+  width: 64px;
+  background: linear-gradient(to left, rgba(34, 211, 238, 0.32), rgba(99, 102, 241, 0.1) 50%, transparent);
+}
+
+.laser-right {
+  right: 0%;
+  box-shadow: 
+    0 0 10px #22D3EE,
+    0 0 25px rgba(34, 211, 238, 0.8),
+    0 0 50px rgba(99, 102, 241, 0.55);
+  animation: laserSweepRight 0.65s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.laser-right::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 100%;
+  width: 64px;
+  background: linear-gradient(to right, rgba(34, 211, 238, 0.32), rgba(99, 102, 241, 0.1) 50%, transparent);
+}
+
+@keyframes laserSweepLeft {
+  0% {
+    left: 0%;
+    opacity: 0;
+  }
+  15% {
+    opacity: 1;
+  }
+  85% {
+    left: 50%;
+    opacity: 1;
+  }
+  100% {
+    left: 50%;
+    opacity: 0;
+  }
+}
+
+@keyframes laserSweepRight {
+  0% {
+    right: 0%;
+    opacity: 0;
+  }
+  15% {
+    opacity: 1;
+  }
+  85% {
+    right: 50%;
+    opacity: 1;
+  }
+  100% {
+    right: 50%;
+    opacity: 0;
+  }
+}
+
+/* Center collision flare line */
+.theme-collision-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 2px;
+  transform: translateX(-50%);
+  background: #FFFFFF;
+  opacity: 0;
+  box-shadow: 
+    0 0 20px #22D3EE,
+    0 0 45px #22D3EE,
+    0 0 90px #6366F1;
+  animation: collisionLinePulse 0.45s ease-out 0.52s forwards;
+}
+
+@keyframes collisionLinePulse {
+  0% {
+    opacity: 0;
+    width: 2px;
+  }
+  30% {
+    opacity: 1;
+    width: 8px;
+  }
+  70% {
+    opacity: 0.9;
+    width: 14px;
+  }
+  100% {
+    opacity: 0;
+    width: 2px;
+  }
+}
+
+/* Center horizontal energy burst / ripple */
+.theme-collision-burst {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0px;
+  height: 0px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.9) 0%, rgba(34, 211, 238, 0.6) 30%, rgba(99, 102, 241, 0.3) 60%, transparent 75%);
+  opacity: 0;
+  animation: collisionBurstRipple 0.45s ease-out 0.52s forwards;
+}
+
+@keyframes collisionBurstRipple {
+  0% {
+    width: 0px;
+    height: 0px;
+    opacity: 0;
+  }
+  25% {
+    width: 320px;
+    height: 320px;
+    opacity: 1;
+  }
+  100% {
+    width: 700px;
+    height: 700px;
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(root),
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation: none !important;
+  }
+  .theme-sweep-container {
+    display: none !important;
+  }
+}
+
