@@ -20,7 +20,7 @@ const META = {
   date: runAt.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" }),
   branch: git("rev-parse --abbrev-ref HEAD"),
   commit: git("rev-parse --short HEAD"),
-  machine: `${os.type()} ${os.release()}, ${os.cpus()[0].model.trim()} (${os.cpus().length} threads), ${Math.round(os.totalmem() / 2 ** 30)} GB RAM`,
+  machine: `${os.version()}, ${os.cpus()[0].model.trim()} (${os.cpus().length} threads), ${Math.round(os.totalmem() / 2 ** 30)} GB RAM`,
   gt_source: GT_SOURCE,
   gt_note: "The sample files are byte-identical (same SHA-256) to the three Cadence documents this ground truth labels, so capture.js copies its rows to data/outputs/ground_truth_samples.csv with only the file column renamed to sample.pdf / sample.docx / sample.pptx.",
 };
@@ -109,20 +109,24 @@ const byName = Object.fromEntries(FILES.map((f) => [f.filename.split(".")[1], f]
 const evalOf = Object.fromEntries(EVAL.files.map((x) => [x.file.split(".")[1], x]));
 // "MISSED by cause" lines of evaluation.diagnose: "  TYPE  cause  n"
 const causes = {};
+const typeCauses = {};
 EVAL.diagnosis.split("MISSED value shapes")[0].split("\n").forEach((l) => {
-  const m = l.match(/^\s+\S+\s+(.+?)\s+(\d+)$/);
-  if (m) causes[m[1]] = (causes[m[1]] || 0) + Number(m[2]);
+  const m = l.match(/^\s+(\S+)\s+(.+?)\s+(\d+)$/);
+  if (!m) return;
+  causes[m[2]] = (causes[m[2]] || 0) + Number(m[3]);
+  (typeCauses[m[1]] = typeCauses[m[1]] || []).push(`${m[2]} ${m[3]}`);
 });
 const fpTypes = (EVAL.diagnosis.match(/FALSE POSITIVES by type: (.*)/) || [])[1] || "";
-const zeroRecall = EVAL.per_type.filter((t) => t.support > 0 && t.tp === 0).map((t) => `${t.type} (${t.support})`);
+const zeroRecall = EVAL.per_type.filter((t) => t.support > 0 && t.tp === 0)
+  .map((t) => `${t.type} (${t.support} labelled; ${(typeCauses[t.type] || []).join(", ")})`);
 const unlabelledTypes = EVAL.per_type.filter((t) => t.support === 0).map((t) => `${t.type} (${t.fp} detection)`);
 const observed = [
   `sample.pdf was not cleared for the LLM: redaction verified all ${byName.pdf.block_count} blocks, but the residual check found ${byName.pdf.leaks.length} detected value(s) repeated in blocks where detection missed them: ${byName.pdf.leaks.join(" ")} This is the safety check working: the file's redacted text is withheld from the ZIP and .txt exports.`,
   `sample.pdf is a scanned document: ${byName.pdf.extraction.sources.ocr || 0} of ${byName.pdf.block_count} blocks come from OCR, and ${byName.pdf.extraction.low_ocr_blocks} OCR blocks are below the ${byName.pdf.extraction.low_ocr_threshold} confidence threshold. Extraction (${secs(byName.pdf.timings.extraction)}) dominates its processing time.`,
-  `sample.docx is image-heavy: ${byName.docx.extraction.ocr_blocks} OCR blocks with mean confidence ${pct(byName.docx.extraction.mean_ocr)}, ${byName.docx.extraction.low_ocr_blocks} of them below ${byName.docx.extraction.low_ocr_threshold}. This is why its recall (${pct(evalOf.docx.recall)}) is the lowest of the three files. DOCX has no fixed pages, so its page count shows 0 and locations are paragraph/table positions.`,
-  `Misses by cause (evaluation.diagnose): ${Object.entries(causes).map(([k, v]) => `${k} ${v}`).join(", ")}. "Not in extracted text" means the value is in an image or figure that OCR did not read correctly; "found, wrong type or span" means a detection overlapped the value but with another type or a different span.`,
+  `sample.docx is image-heavy: ${byName.docx.extraction.ocr_blocks} OCR blocks with mean confidence ${pct(byName.docx.extraction.mean_ocr)}, ${byName.docx.extraction.low_ocr_blocks} of them below ${byName.docx.extraction.low_ocr_threshold}. Its recall (${pct(evalOf.docx.recall)}) is the lowest of the three files. DOCX has no fixed pages, so its page count shows 0 and locations are paragraph/table positions.`,
+  `Misses by cause (evaluation.diagnose): ${Object.entries(causes).map(([k, v]) => `${k} ${v}`).join(", ")}. "Not in extracted text" means the labelled value does not appear in the extracted text at all (for example text in an image that OCR skipped or misread); "found, wrong type or span" means a detection overlapped the value but with another type or a different span.`,
   `False positives by type: ${fpTypes.replace(/[{}']/g, "")}.`,
-  `Labelled types never found: ${zeroRecall.join(", ") || "none"}. These values sit in images (IP addresses, photos) or have formats no rule covers (PESEL).${unlabelledTypes.length ? ` Types detected but not labelled in the ground truth: ${unlabelledTypes.join(", ")}.` : ""}`,
+  `Labelled types never found: ${zeroRecall.join(", ") || "none"}.${unlabelledTypes.length ? ` Types detected but not labelled in the ground truth: ${unlabelledTypes.join(", ")}.` : ""}`,
   `Speed on the machine listed on the title page: ${FILES.map((f) => `${f.filename} ${secs(sum(f.timings))}`).join(", ")}. OCR and the transformer models (GLiNER, TinyBERT, spaCy) take almost all of it; redaction itself takes milliseconds.`,
 ];
 const warnCodes = (f) => {
@@ -145,7 +149,7 @@ children.push(
     ["Machine", META.machine],
   ], [1, 3]),
   new Paragraph({ children: [new PageBreak()] }),
-  new Paragraph({ heading: HeadingLevel.HEADING_1, children: [new TextRun("Contents")] }),
+  new Paragraph({ spacing: { after: 160 }, children: [new TextRun({ text: "Contents", bold: true, size: 34, color: ACCENT })] }),
   new TableOfContents("Contents", { hyperlink: true, headingStyleRange: "1-2" }),
   P("Right-click the table and choose Update Field if page numbers are missing."),
 );
