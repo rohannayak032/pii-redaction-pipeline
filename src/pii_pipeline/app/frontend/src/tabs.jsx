@@ -39,14 +39,12 @@ function EntityDetail({ entity }) {
     ["Confidence", entity.confidence != null ? `${(entity.confidence * 100).toFixed(1)}%` : "-"],
     ["Detector", entity.detector],
     ["Source File", entity.file],
-    ["Block index", entity.block_index],
     ["Page / Slide", entity.page ?? "-"],
-    ["Location", entity.location || "-"],
-    ["Char start", entity.start],
-    ["Char end", entity.end],
     ...(entity.count > 1
-      ? [["Occurrences", entity.count], ["All offsets", entity.spans.map(([s, t]) => `${s}–${t}`).join(", ")]]
-      : []),
+      ? [["Occurrences", entity.count],
+         ["All locations", entity.hits.map((h) => `${h.location || "-"} (${h.start}–${h.end})`).join("; ")]]
+      : [["Block index", entity.block_index], ["Location", entity.location || "-"],
+         ["Char start", entity.start], ["Char end", entity.end]]),
   ];
   return (
     <div className="entity-detail">
@@ -88,7 +86,7 @@ export function OverviewTab({ results }) {
     { key: "status", label: "Status", render: (r) => <StatusBadge status={r.status} /> },
     { key: "pages", label: "Pages", render: (r) => r.pages.length, className: "num" },
     { key: "block_count", label: "Blocks", className: "num" },
-    { key: "det", label: "Detections", render: (r) => r.entities.length, className: "num" },
+    { key: "det", label: "Unique PII", render: (r) => groupFindings(r.entities).length, className: "num" },
     { key: "red", label: "Redactions", render: (r) => r.records.length, className: "num" },
     { key: "cats", label: "Redactions by type", className: "wrap",
       render: (r) => Object.entries(r.report.summary.by_pii_type).map(([k, v]) => `${k} ×${v}`).join(", ") || "—" },
@@ -142,22 +140,30 @@ export function OverviewTab({ results }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // FINDINGS TAB — searchable, filterable cross-file detections
 // ─────────────────────────────────────────────────────────────────────────────
-// One row per value at a location: a screenshot listing a name on every line is one finding with a count.
-function groupFindings(rows) {
+// One row per unique PII value in a file: a name repeated across paragraphs, tables and OCR'd images
+// (and found by several detectors) is one finding with a count and every location.
+export function groupFindings(rows) {
   const groups = new Map();
   rows.forEach((e) => {
-    const key = JSON.stringify([e.file, e.block_index, e.pii_type, e.value, e.placeholder]);
+    const key = JSON.stringify([e.file, e.pii_type, e.value, e.placeholder]);
     const g = groups.get(key);
+    const hit = { location: e.location, page: e.page, start: e.start, end: e.end };
     if (!g) {
-      groups.set(key, { ...e, count: 1, detectors: [e.detector], spans: [[e.start, e.end]] });
+      groups.set(key, { ...e, count: 1, detectors: [e.detector], hits: [hit] });
       return;
     }
     g.count += 1;
-    g.spans.push([e.start, e.end]);
+    g.hits.push(hit);
     if (!g.detectors.includes(e.detector)) g.detectors.push(e.detector);
     if (e.confidence != null && (g.confidence == null || e.confidence > g.confidence)) g.confidence = e.confidence;
   });
-  return [...groups.values()].map((g, i) => ({ ...g, n: i + 1, detector: g.detectors.join(", ") }));
+  return [...groups.values()].map((g, i) => {
+    const locations = [...new Set(g.hits.map((h) => h.location || "-"))];
+    const pages = [...new Set(g.hits.map((h) => h.page).filter((p) => p != null))].sort((a, b) => a - b);
+    return { ...g, n: i + 1, detector: g.detectors.join(", "), locations,
+             location: locations.length > 1 ? `${locations[0]} (+${locations.length - 1} more)` : locations[0],
+             page: pages.length ? pages.join(", ") : null };
+  });
 }
 
 function DetectionsTable({ rows, showFile }) {
@@ -205,8 +211,8 @@ function DetectionsTable({ rows, showFile }) {
       <DataTable columns={cols} rows={findings} expandRow={(e) => <EntityDetail entity={e} />}
         empty="No detections match the current filters." />
       <p className="findings-footer">
-        {findings.length} findings ({filtered.length} of {rows.length} detections; repeats of a value at one location
-        are grouped) · values are shown here only; exports never contain them
+        {findings.length} unique PII values ({filtered.length} of {rows.length} detections; every repeat of a value
+        is grouped into one row) · values are shown here only; exports never contain them
       </p>
     </>
   );
@@ -436,7 +442,8 @@ export function FileTab({ runId, results }) {
 
           <div className="metrics-grid metrics-grid--compact">
             <Metric label="Blocks" value={r.block_count} />
-            <Metric label="Detections" value={r.entities.length} accent={r.entities.length > 0} />
+            <Metric label="Unique PII" value={groupFindings(r.entities).length} accent={r.entities.length > 0}
+              help={`${r.entities.length} detections in total, repeats included`} />
             <Metric label="Redactions" value={r.records.length} />
             <Metric label="Placeholders" value={r.placeholders.length} />
             <Metric label="Residual leaks" value={r.leaks.length} />

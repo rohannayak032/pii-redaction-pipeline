@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, failedStub, precheck } from "./api";
-import { EvalTab, ExportsTab, FileTab, FindingsTab, OverviewTab } from "./tabs";
+import { EvalTab, ExportsTab, FileTab, FindingsTab, OverviewTab, groupFindings } from "./tabs";
 import { Alert, BrandShield, DynamicBackground, Metric, Tabs, ThemeSwitch, ThemeTransitionBeams, useTheme } from "./ui";
 
 // ─── Format file size ─────────────────────────────────────────────────────────
@@ -191,6 +191,7 @@ export default function App() {
   const validFiles = files.filter((f) => f.ok);
   const invalidFiles = files.filter((f) => !f.ok);
   const totalDetections = results.reduce((a, r) => a + r.entities.length, 0);
+  const uniquePii = results.reduce((a, r) => a + groupFindings(r.entities).length, 0);
   const totalRedactions = results.reduce((a, r) => a + r.records.length, 0);
   const totalLeaks = results.reduce((a, r) => a + r.leaks.length, 0);
   const totalSeconds = results.reduce((a, r) => a + Object.values(r.timings).reduce((x, y) => x + y, 0), 0);
@@ -327,8 +328,8 @@ export default function App() {
             {/* Summary metric cards */}
             <div className="metrics-grid">
               <Metric label="Files Processed" value={`${ok.length}/${results.length}`} />
-              <Metric label="PII Detections" value={totalDetections} accent={totalDetections > 0}
-                help="Entities returned by detection.detect (overlapping detections included)" />
+              <Metric label="Unique PII" value={uniquePii} accent={uniquePii > 0}
+                help={`Distinct values per file (type + value); ${totalDetections} detections in total, repeats and overlapping detections included`} />
               <Metric label="Redactions Applied" value={totalRedactions}
                 help="Replaced spans from redaction.redact_document (overlapping detections merged)" />
               <Metric label="Cleared for LLM" value={`${clearedCount}/${results.length}`} accent={clearedCount === results.length && results.length > 0} />
