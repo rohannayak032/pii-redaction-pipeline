@@ -68,7 +68,7 @@ function ExtractionWarnings({ warnings }) {
     { key: "location", label: "Location", className: "wrap" },
     { key: "detail", label: "Detail", className: "wrap" },
   ];
-  return <DataTable columns={cols} rows={warnings} noMax />;
+  return <DataTable columns={cols} rows={warnings} />;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -464,9 +464,10 @@ export function EvalTab({ runId, results, cfg }) {
     return () => { live = false; };
   }, [gt, requireType, exact, runId, results]);
 
-  const metricCols = ["tp", "fp", "fn", "precision", "recall", "f1", "accuracy"].map((k) => ({
+  const counts = ["tp", "fp", "fn"];
+  const metricCols = [...counts, "precision", "recall", "f1", "accuracy"].map((k) => ({
     key: k, label: k.length <= 2 ? k.toUpperCase() : k[0].toUpperCase() + k.slice(1), className: "num",
-    render: (x) => (k.length <= 2 ? x[k] : x[k].toFixed(3)),
+    render: (x) => (counts.includes(k) ? x[k] : x[k].toFixed(3)),
   }));
   const fcols = [
     { key: "file", label: "File", className: "wrap" },
