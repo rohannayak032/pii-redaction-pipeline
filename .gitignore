@@ -226,3 +226,7 @@ data/
 *.pptx
 *.xlsx
 *.zip
+
+# Front-end build output and dependencies
+node_modules/
+src/pii_pipeline/app/frontend/dist/
