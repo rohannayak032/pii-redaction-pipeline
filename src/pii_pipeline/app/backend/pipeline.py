@@ -5,9 +5,9 @@ process_document(filename, data) runs the team's real modules on one uploaded fi
     validate -> extraction.extract_document_detailed -> detection.detect
              -> redaction.redact_document (verifies every block) -> residual-value check
 
-view(result, idx) turns the outputs into the UI's view-model. Raw PII (Entity.value and the
-original block text) stays in server memory for redaction, the residual check and evaluation;
-view() and the exports never contain it.
+view(result, idx) turns the outputs into the UI's view-model. The original block text never leaves
+the server. Entity.value is sent only inside view()["entities"] so the UI can show each detected
+value; trace records, the report, redacted text and every export stay value-free.
 """
 from __future__ import annotations
 
@@ -29,8 +29,8 @@ from pii_pipeline.extraction.validation import LOW_OCR_CONFIDENCE
 from pii_pipeline.redaction import RedactionError, TraceRecord, build_report, redact_document
 from pii_pipeline.schemas import Entity, RedactedBlock
 
-# Extensions the extraction module accepts (it then checks the real format from the content).
-SUPPORTED = sorted(ext for exts in _EXTENSIONS.values() for ext in exts)
+# The extraction module's formats (pdf, docx, pptx); its macro/template variants are not offered.
+SUPPORTED = sorted(f".{fmt}" for fmt in _EXTENSIONS)
 MAX_FILE_MB = 25          # upload limit of this web app (trust boundary); extraction has none
 
 
@@ -173,7 +173,7 @@ def view(r: DocResult, idx: int) -> Dict[str, Any]:
         },
         "detectors": dict(Counter(e.detector for e in r.entities).most_common()),
         "detected_types": dict(Counter(e.pii_type for e in r.entities).most_common()),
-        "entities": [dict(e.public_info(), n=i + 1, location=location.get(e.block_index, ""),
+        "entities": [dict(e.public_info(), value=e.value, n=i + 1, location=location.get(e.block_index, ""),
                           page=r.page_of(e.block_index)) for i, e in enumerate(r.entities)],
         "records": [dict(rec.to_dict(), page=r.page_of(rec.block_index)) for rec in r.records],
         "report": report,

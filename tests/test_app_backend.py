@@ -34,14 +34,21 @@ def test_rejects_bad_uploads_before_extraction():
     assert (empty.status, empty.failed_stage) == ("failed", "validation")
 
 
-def test_redacts_and_view_has_no_raw_values(tmp_path, monkeypatch):
+def test_redacts_and_only_detections_carry_the_value(tmp_path, monkeypatch):
     monkeypatch.setattr(P, "detect", find_email)
     res = P.process_document("t.docx", make_docx(tmp_path, f"Mail {EMAIL} today.", "No PII here."))
     assert res.status in ("success", "warning") and res.llm_ready and not res.leaks
     view = P.view(res, 0)
     assert view["records"][0]["placeholder"] == "[EMAIL_1]" and view["entities"][0]["placeholder"] == "[EMAIL_1]"
     assert "[EMAIL_1]" in view["redacted"][0]["text"]
-    assert EMAIL not in json.dumps(view) and EMAIL not in res.redacted_text()
+    assert view["entities"][0]["value"] == EMAIL   # shown in the UI's Value column
+    rest = {k: v for k, v in view.items() if k != "entities"}   # records, report, redacted text feed the exports
+    assert EMAIL not in json.dumps(rest) and EMAIL not in res.redacted_text()
+
+
+def test_only_pdf_docx_pptx_are_accepted():
+    assert P.SUPPORTED == [".docx", ".pdf", ".pptx"]
+    assert P.process_document("t.docm", b"PK").failed_stage == "validation"
 
 
 def test_undetected_repeat_is_a_leak(tmp_path, monkeypatch):

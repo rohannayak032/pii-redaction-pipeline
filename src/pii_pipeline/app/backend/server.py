@@ -6,8 +6,9 @@ modules, and scores runs with the evaluation module. Nothing here re-implements 
 
 Run from the repository root:  python -m uvicorn --app-dir src pii_pipeline.app.backend.server:app
 
-Privacy: raw PII values stay inside the server process (in memory) and are never put in any response. Results are
-kept per "run" only so exports and ground-truth scoring can be done; "Clear all" deletes the run.
+Privacy: the original block text stays inside the server process (in memory). Detected values go to the browser only
+in the /process response (Value column); evaluation results and every export are value-free. Results are kept per
+"run" only so exports and ground-truth scoring can be done; "Clear all" deletes the run.
 """
 from __future__ import annotations
 

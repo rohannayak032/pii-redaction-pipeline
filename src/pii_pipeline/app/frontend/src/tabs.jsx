@@ -34,6 +34,7 @@ function HighlightedText({ text }) {
 function EntityDetail({ entity }) {
   const rows = [
     ["PII Type", entity.pii_type],
+    ["Value", <code key="v">{entity.value}</code>],
     ["Placeholder", <code key="ph">{entity.placeholder || "-"}</code>],
     ["Confidence", entity.confidence != null ? `${(entity.confidence * 100).toFixed(1)}%` : "-"],
     ["Detector", entity.detector],
@@ -55,7 +56,7 @@ function EntityDetail({ entity }) {
         ))}
       </div>
       <p className="entity-detail-note">
-        Offsets refer to the original block text. The original value never leaves the server.
+        Offsets refer to the original block text. Exports and reports never contain the value.
       </p>
     </div>
   );
@@ -152,11 +153,12 @@ function DetectionsTable({ rows, showFile }) {
     (!detectors.length || detectors.includes(e.detector)) &&
     (!files.length || files.includes(e.file)) &&
     (!pages.length || pages.includes(e.page)) &&
-    (!q || [e.pii_type, e.placeholder, e.file, e.location, e.detector].some((v) => (v || "").toLowerCase().includes(q))));
+    (!q || [e.pii_type, e.value, e.placeholder, e.file, e.location, e.detector].some((v) => (v || "").toLowerCase().includes(q))));
 
   const cols = [
     { key: "n", label: "#", className: "num" },
     { key: "pii_type", label: "PII Type" },
+    { key: "value", label: "Value", className: "wrap" },
     { key: "placeholder", label: "Placeholder", className: "nowrap", render: (e) => <code>{e.placeholder || "-"}</code> },
     { key: "confidence", label: "Confidence", className: "num", render: (e) => conf(e.confidence) },
     { key: "detector", label: "Detector" },
@@ -168,7 +170,7 @@ function DetectionsTable({ rows, showFile }) {
   return (
     <>
       <div className="findings-toolbar">
-        <SearchInput value={search} onChange={setSearch} placeholder="Search type, placeholder, detector, location…" />
+        <SearchInput value={search} onChange={setSearch} placeholder="Search value, type, placeholder, detector, location…" />
         <div className="findings-filters">
           <MultiSelect label="PII Type" options={options("pii_type")} value={types} onChange={setTypes} />
           <MultiSelect label="Detector" options={options("detector")} value={detectors} onChange={setDetectors} />
@@ -180,7 +182,7 @@ function DetectionsTable({ rows, showFile }) {
       <DataTable columns={cols} rows={filtered} expandRow={(e) => <EntityDetail entity={e} />}
         empty="No detections match the current filters." />
       <p className="findings-footer">
-        {filtered.length} of {rows.length} detections shown · values stay on the server
+        {filtered.length} of {rows.length} detections shown · values are shown here only; exports never contain them
       </p>
     </>
   );

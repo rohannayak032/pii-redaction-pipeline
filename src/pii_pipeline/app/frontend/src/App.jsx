@@ -226,10 +226,10 @@ export default function App() {
             <br />PII Before It Reaches an LLM
           </h1>
           <p className="hero-sub">
-            Extraction, detection, redaction and verification run on the server; the browser only receives redacted text and metadata
+            Extraction, detection, redaction and verification run on the server; the browser receives the detections and the redacted text, never the original document
           </p>
           <div className="hero-badges">
-            <span className="hero-badge">No raw PII in any response</span>
+            <span className="hero-badge">No raw PII in exports</span>
             <span className="hero-badge">Rules + ML detection</span>
             <span className="hero-badge">Every block verified after redaction</span>
           </div>
@@ -310,7 +310,7 @@ export default function App() {
           <div className="upload-footer">
             Supported formats: {cfg.supported.join(", ")} &nbsp;·&nbsp;
             Max {cfg.max_file_mb} MB per file &nbsp;·&nbsp;
-            Raw PII values never leave the server
+            Exports never contain raw PII values
           </div>
         )}
 

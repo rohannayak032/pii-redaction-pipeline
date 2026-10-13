@@ -46,5 +46,7 @@ saves screenshots, API responses and exports to `data/outputs/`. `build_report.j
 `data/` is git-ignored, so the outputs stay on your machine.
 
 ## Privacy
-Raw PII and original block text never leave the server process and are never in any API response or export.
+The original block text never leaves the server process. Detected values are sent to the browser only to fill the
+Value column of the detection tables; trace records, the exposure report, the evaluation results and every export
+(JSON, CSV, ZIP, .txt) contain no raw values. Run the server on a trusted machine only (it binds to 127.0.0.1).
 Results are held in memory per run (max 20) so exports and evaluation work; **Clear all** deletes the run.
