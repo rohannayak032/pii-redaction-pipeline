@@ -97,6 +97,7 @@ EMAIL = re.compile(
 EMPLOYEE_ID = re.compile(
     r"(?<![A-Za-z0-9])"  # Not immediately preceded by a letter or digit.
     r"EMP-"              # Required EMP- prefix.
+    r"[ \t]?"            # OCR sometimes inserts a space: "EMP- 41501".
     r"\d{5}"             # Exactly 5 digits.
     r"(?![A-Za-z0-9])"   # Not immediately followed by a letter or digit.
 )
@@ -189,7 +190,7 @@ PASSPORT = re.compile(
 DOB = re.compile(
     r"(?i)"  # Make the pattern case-insensitive.
     r"\b(?:date\s+of\s+birth|d\.?o\.?b\.?|born(?:\s+on)?)\b"  # Birth-related label, whole words only.
-    r"\s*[:\-]?\s*"  # Optional spaces and ':' or '-'.
+    r"\s*[:,\-]?\s*"  # Optional spaces and ':', ',' or '-'.
     r"("  # Capture only the actual date.
         r"\d{1,2}[/-]\d{1,2}[/-]\d{2,4}"  # Numeric date.
         r"|"
@@ -213,6 +214,15 @@ DOB = re.compile(
 PAYMENT_CARD = re.compile(
     r"(?<!\d)(?:\d[ -]?){12,18}\d(?!\d)"
 )
+
+
+# The last four digits of a card, account or SSN still identify it:
+# "card ending 2218", "account ending in 0042", "social security number (8827)".
+LAST_DIGITS = [
+    (re.compile(r"(?i)\bcard\b[^.\n\d]{0,20}?\bending(?:\s+in)?\s+(\d{4})\b"), "CREDIT_CARD"),
+    (re.compile(r"(?i)\b(?:account|a/c)\b[^.\n\d]{0,20}?\bending(?:\s+in)?\s+(\d{4})\b"), "ACCOUNT"),
+    (re.compile(r"(?i)\b(?:social\s+security\s+number|ssn)\b[^.\n\d]{0,10}?(\d{4})(?![\d-])"), "SSN"),
+]
 
 
 def passes_luhn(number: str) -> bool:
@@ -258,6 +268,14 @@ def passes_luhn(number: str) -> bool:
 
 INDIAN_MOBILE = (PhoneNumberType.MOBILE, PhoneNumberType.FIXED_LINE_OR_MOBILE)
 
+# "+1 (555) 0142", "+44 20 5555 0101": libphonenumber rejects numbers outside
+# real ranges (555 area codes, short test numbers), but a leading "+country
+# code" followed by digit groups is a phone number. 8-15 digits (E.164 limit).
+# At most 3 groups, so a number in a table does not swallow the next column.
+INTL_PHONE = re.compile(
+    r"(?<![\w+])\+\d{1,3}(?:[ \t.-]?(?:\(\d{1,5}\)|\d{1,5})){2,3}(?![\d])"
+)
+
 
 def find_phones(block: TextBlock, regions: tuple[str, ...] = ("US", "IN")) -> list[Entity]:
     """
@@ -288,6 +306,11 @@ def find_phones(block: TextBlock, regions: tuple[str, ...] = ("US", "IN")) -> li
             if not phonenumbers.is_valid_number(match.number):
                 continue
 
+            # "2026-041 13.1" (an ID and a score in a table) ends in a
+            # one-digit group; phone numbers never do.
+            if len(re.findall(r"\d+", match.raw_string)[-1]) < 2:
+                continue
+
             # Almost any 10 digits is a valid Indian landline, so without
             # a leading 0 accept only mobiles: "1234567890" is not a phone.
             if (
@@ -311,6 +334,22 @@ def find_phones(block: TextBlock, regions: tuple[str, ...] = ("US", "IN")) -> li
             # A number with a country code is found once per region.
             if not overlaps(entity, found):
                 found.append(entity)
+
+    for match in INTL_PHONE.finditer(block.text):
+        if not 8 <= sum(c.isdigit() for c in match.group()) <= 15:
+            continue
+        entity = Entity(
+            file=block.file,
+            block_index=block.index,
+            start=match.start(),
+            end=match.end(),
+            pii_type="PHONE",
+            confidence=0.9,
+            detector="regex.phone",
+            value=match.group(),
+        )
+        if not overlaps(entity, found):
+            found.append(entity)
 
     return found
 
@@ -433,7 +472,8 @@ def find_patterns(block: TextBlock) -> list[Entity]:
 
     This combines:
     1. Regular-expression detectors for structured identifiers.
-    2. Payment-card candidate detection with Luhn validation.
+    2. Payment-card candidate detection with Luhn validation, and the
+       last four digits of a card, account or SSN named in context.
     3. Phone-number detection and validation.
     4. Contextual date-of-birth detection.
     5. Presidio-based person-name detection.
@@ -493,6 +533,21 @@ def find_patterns(block: TextBlock) -> list[Entity]:
                 value=match.group(),
             )
         )
+
+    for regex, pii_type in LAST_DIGITS:
+        for match in regex.finditer(block.text):
+            found.append(
+                Entity(
+                    file=block.file,
+                    block_index=block.index,
+                    start=match.start(1),
+                    end=match.end(1),
+                    pii_type=pii_type,
+                    confidence=0.9,
+                    detector="regex.last_digits",
+                    value=match.group(1),
+                )
+            )
 
     # ---------------------------------------------------------
     # 3. Phone-number detection

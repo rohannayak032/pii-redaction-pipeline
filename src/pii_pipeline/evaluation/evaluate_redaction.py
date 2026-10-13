@@ -37,6 +37,8 @@ To score the real pipeline (prints only the metrics table)::
 from __future__ import annotations
 
 import argparse
+import difflib
+import json
 import re
 import sys
 from collections import Counter, defaultdict
@@ -68,6 +70,7 @@ TYPE_ALIASES: Dict[str, str] = {
     "BANK_ACCOUNT": "ACCOUNT",
     "ACCOUNT_NUMBER": "ACCOUNT",
     "PASSPORT_NUMBER": "PASSPORT",
+    "DIRECTOR_ID": "EMPLOYEE_ID",   # the Cadence ground truth labels DIR- IDs as EMPLOYEE_ID
 }
 
 _TEXT_ATTRS: Tuple[str, ...] = ("redacted_text", "text", "content")
@@ -86,6 +89,7 @@ class Span:
     end: Optional[int]
     value: str
     case_id: str = ""
+    location: str = ""
 
     def as_dict(self) -> Dict[str, Any]:
         """Return a JSON-friendly representation."""
@@ -131,8 +135,22 @@ def load_ground_truth(ground_truth_csv: str) -> List[Span]:
                 raise ValueError(f"end must be > start in row: {row}")
         # Rows without offsets are matched by file + type + value instead.
         spans.append(Span(str(row.file), pii_type, start, end,
-                          str(row.value), str(row.case_id)))
+                          str(row.value), str(row.case_id), str(row.location)))
     return spans
+
+
+def in_split(file: str, location: str, split: Optional[str]) -> bool:
+    """Dev/test split: dev = every non-PDF file plus PDF odd pages, test = PDF even pages.
+
+    Works for both ground-truth locations ("page 3 figure") and extraction
+    locations ("page 3, paragraph 2 (OCR)").
+    """
+    if split is None:
+        return True
+    page = re.match(r"page (\d+)", location) if file.lower().endswith(".pdf") else None
+    if page is None:
+        return split == "dev"
+    return (int(page.group(1)) % 2 == 1) == (split == "dev")
 
 
 def entities_to_spans(entities: Sequence[Any]) -> List[Span]:
@@ -169,11 +187,26 @@ def merge_overlaps(entities: Sequence[Any]) -> List[Any]:
 def _overlap_ratio(a: Span, b: Span) -> float:
     """Value overlap: len(shorter) / len(longer) if one contains the other.
 
-    Values are whitespace-normalised. For nested spans this equals their
-    intersection-over-union, without needing offsets in the same coordinates.
+    Values are compared on letters and digits only, lower-cased, so OCR slips
+    in spacing and punctuation ("+44 20 75550163", "tlindqvist@...") still
+    match. For nested spans this equals their intersection-over-union,
+    without needing offsets in the same coordinates.
     """
-    x, y = sorted((_squash(a.value), _squash(b.value)), key=len)
-    return len(x) / len(y) if x and x in y else 0.0
+    x, y = sorted((_alnum(a.value), _alnum(b.value)), key=len)
+    if x and x in y:
+        return len(x) / len(y)
+    # One OCR-misread letter in a name or email ("a.chatteree@...",
+    # "cadencetg.com"). Values with digits (IDs, phones, PAN) must match
+    # exactly: one changed digit is another person.
+    if len(x) >= 8 and not any(c.isdigit() for c in x + y):
+        ratio = difflib.SequenceMatcher(None, x, y).ratio()
+        if ratio >= 0.9:
+            return ratio
+    return 0.0
+
+
+def _alnum(text: str) -> str:
+    return re.sub(r"[\W_]+", "", text).lower()
 
 
 def _squash(text: str) -> str:
@@ -225,6 +258,7 @@ def evaluate_redaction(
     iou_threshold: float = 0.5,
     require_type_match: bool = True,
     check_redaction: bool = True,
+    split: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Score a PII redaction pipeline against ground truth.
 
@@ -253,6 +287,7 @@ def evaluate_redaction(
     warnings: List[str] = []
 
     # Score only files that were run, so a held-out document is not counted as missed.
+    truth = [g for g in truth if in_split(g.file, g.location, split)]
     run_files = {getattr(b, "file", None) for b in redacted_blocks}
     if run_files:
         skipped = sum(g.file not in run_files for g in truth)
@@ -308,10 +343,18 @@ def evaluate_redaction(
                 continue
         counts[g.pii_type]["tp"] += 1
 
+    # A detection that repeats a labelled value in the same file is PII the
+    # ground truth labelled only once (e.g. once per slide), not over-redaction.
+    repeats = 0
     for pi, p in enumerate(preds):
-        if pi not in used_preds:
-            counts[p.pii_type]["fp"] += 1
-            false_pos.append(p.as_dict())
+        if pi in used_preds:
+            continue
+        if any(g.file == p.file and (not require_type_match or g.pii_type == p.pii_type)
+               and _overlap_ratio(g, p) >= iou_threshold for g in truth):
+            repeats += 1
+            continue
+        counts[p.pii_type]["fp"] += 1
+        false_pos.append(p.as_dict())
 
     tp = sum(c["tp"] for c in counts.values())
     fp = sum(c["fp"] for c in counts.values())
@@ -323,6 +366,7 @@ def evaluate_redaction(
                      for t, c in sorted(counts.items())},
         "details": {"missed": missed, "leaked": leaked,
                     "false_positives": false_pos},
+        "repeats": repeats,
         "warnings": warnings,
     }
 
@@ -344,7 +388,8 @@ def format_report(result: Dict[str, Any]) -> str:
     lines.append(row("OVERALL", result["overall"]))
     d = result["details"]
     lines.append(f"\nMissed: {len(d['missed'])} | Leaked: {len(d['leaked'])} "
-                 f"| False positives: {len(d['false_positives'])}")
+                 f"| False positives: {len(d['false_positives'])} "
+                 f"| Repeats of labelled values (not FP): {result.get('repeats', 0)}")
     for w in result["warnings"]:
         lines.append(f"WARNING: {w}")
     return "\n".join(lines)
@@ -482,6 +527,42 @@ def test_diagnose_shows_shapes_not_values(tmp_path: Any) -> None:
     assert not any(v in report for v in ("bob@x.com", "9876543210", "Alice"))
 
 
+def test_ocr_spacing_matches_and_repeats_are_not_fp(tmp_path: Any) -> None:
+    gt = _write_gt(tmp_path)
+    preds = [_entity("a.txt", "EMAIL", 0, 8, "bobx.com"),              # OCR dropped "@"
+             _entity("a.txt", "PHONE", 20, 31, "98765 43210"),          # OCR added a space
+             _entity("a.txt", "EMAIL", 0, 9, "bob@x.com", block=1)]     # same value again
+    out = evaluate_redaction(gt, preds, [_block("a.txt", "[E] [P] [E]")])
+    assert out["overall"]["tp"] == 2 and out["overall"]["fp"] == 0 and out["repeats"] == 1
+
+
+def test_one_misread_letter_matches_but_one_digit_does_not(tmp_path: Any) -> None:
+    path = str(tmp_path / "gt4.csv")
+    pd.DataFrame([["a.txt", "T", "EMAIL", "a.chatterjee@cadencefg.com", "p", "", ""],
+                  ["a.txt", "T", "PHONE", "+44 20 7555 0171", "p", "", ""]],
+                 columns=list(REQUIRED_COLUMNS)).to_csv(path, index=False)
+    preds = [_entity("a.txt", "EMAIL", 0, 25, "a.chatteree@cadencefg.com"),
+             _entity("a.txt", "PHONE", 30, 46, "+44 20 7555 0172")]
+    out = evaluate_redaction(path, preds, [_block("a.txt", "[E] [P]")])
+    assert out["per_type"]["EMAIL"]["tp"] == 1 and out["per_type"]["PHONE"]["fp"] == 1
+
+
+def test_director_ids_score_as_employee_ids(tmp_path: Any) -> None:
+    path = str(tmp_path / "gt3.csv")
+    pd.DataFrame([["a.txt", "T", "EMPLOYEE_ID", "DIR-0042", "page 1", "", ""]],
+                 columns=list(REQUIRED_COLUMNS)).to_csv(path, index=False)
+    out = evaluate_redaction(path, [_entity("a.txt", "DIRECTOR_ID", 0, 8, "DIR-0042")],
+                             [_block("a.txt", "[DIRECTOR_ID_1]")])
+    assert out["overall"]["tp"] == 1
+
+
+def test_dev_test_split_by_pdf_page(tmp_path: Any) -> None:
+    assert in_split("d.pdf", "page 3 figure", "dev") and not in_split("d.pdf", "page 3, paragraph 1 (OCR)", "test")
+    assert in_split("d.pdf", "page 4", "test") and not in_split("d.pdf", "page 4", "dev")
+    assert in_split("d.docx", "page 4", "dev") and not in_split("d.pptx", "slide 2", "test")
+    assert in_split("d.pdf", "document properties", "dev") and in_split("d.pdf", "page 4", None)
+
+
 def _run_selftests() -> int:
     import tempfile
     from pathlib import Path
@@ -525,20 +606,31 @@ def _demo(gt_path: str) -> None:
     print(format_report(evaluate_redaction(gt_path, preds, blocks)))
 
 
-def run_pipeline(gt_path: str, docs: Sequence[str]) -> Tuple[Dict[str, Any], list, list]:
+def run_pipeline(gt_path: str, docs: Sequence[str],
+                 split: Optional[str] = None) -> Tuple[Dict[str, Any], list, list]:
     """Extract, detect and redact ``docs``, then score them.
 
-    File names must match the CSV's ``file`` column. Returns the result plus
+    File names must match the CSV's ``file`` column. A ``.jsonl`` doc is read
+    as blocks already saved by the extraction CLI. Returns the result plus
     the blocks and entities, for :func:`diagnose`.
     """
     from pii_pipeline.detection.detector import detect
     from pii_pipeline.extraction import extract_document
     from pii_pipeline.redaction import redact_document
 
-    blocks = [b for doc in docs for b in extract_document(doc)]
+    from pii_pipeline.schemas import TextBlock
+
+    def load(doc: str) -> list:
+        # Blocks saved by `python -m pii_pipeline.extraction FILE --out x.jsonl` skip slow OCR.
+        if str(doc).endswith(".jsonl"):
+            with open(doc, encoding="utf-8") as handle:
+                return [TextBlock(**json.loads(line)["block"]) for line in handle]
+        return extract_document(doc)
+
+    blocks = [b for doc in docs for b in load(doc) if in_split(b.file, b.location, split)]
     entities = detect(blocks)
     redacted, _ = redact_document(blocks, entities)
-    return evaluate_redaction(gt_path, entities, redacted), blocks, entities
+    return evaluate_redaction(gt_path, entities, redacted, split=split), blocks, entities
 
 
 def _shape(value: str) -> str:
@@ -546,10 +638,12 @@ def _shape(value: str) -> str:
     return re.sub(r"[a-z]", "a", re.sub(r"[A-Z]", "A", re.sub(r"\d", "9", _squash(value))))[:40]
 
 
-def diagnose(result: Dict[str, Any], blocks: Sequence[Any], entities: Sequence[Any]) -> str:
+def diagnose(result: Dict[str, Any], blocks: Sequence[Any], entities: Sequence[Any],
+             show_values: bool = False) -> str:
     """Why ground truth was missed and what false positives look like.
 
-    Shows only counts and value shapes, never values, so it is safe to share.
+    By default shows only counts and value shapes, never values, so it is safe
+    to share. ``show_values`` adds the actual values for local tuning only.
     """
     text: Dict[str, str] = defaultdict(str)
     for b in blocks:
@@ -583,6 +677,17 @@ def diagnose(result: Dict[str, Any], blocks: Sequence[Any], entities: Sequence[A
                  f"{dict(sorted(Counter(len(p['value'].split()) for p in fps if p['type'] == 'NAME').items()))}")
     lines.append("RAW detections by type/detector: "
                  f"{dict(Counter((e.pii_type, e.detector.split(':')[0]) for e in entities))}")
+    if show_values:
+        lines.append("\nLOCAL ONLY - contains document values, never share:")
+        for t in sorted({p["type"] for p in fps}):
+            top = Counter(_squash(p["value"]) for p in fps if p["type"] == t).most_common(40)
+            lines.append(f"FP {t}: {top}")
+        for m in details["missed"]:
+            v = _squash(m["value"])
+            near = [f"{p.pii_type}:{p.value!r}" for p in preds if p.file == m["file"] and p.value
+                    and (v in _squash(p.value) or _squash(p.value) in v)]
+            lines.append(f"MISSED {m['type']} {v!r} {m['case_id']} near={near[:3]}")
+        lines += [f"LEAKED {m['type']} {_squash(m['value'])!r}" for m in details["leaked"]]
     return "\n".join(lines)
 
 
@@ -596,14 +701,18 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                     help="run the real pipeline on these files and print the metrics table")
     ap.add_argument("--diagnose", action="store_true",
                     help="with --docs: also print miss causes and value shapes (no values)")
+    ap.add_argument("--show-values", action="store_true",
+                    help="with --diagnose: also list false-positive and missed VALUES (local only)")
+    ap.add_argument("--split", choices=("dev", "test"),
+                    help="with --docs: dev = non-PDF files + PDF odd pages, test = PDF even pages")
     args = ap.parse_args(argv)
     if args.selftest:
         return _run_selftests()
     if args.docs:
-        result, blocks, entities = run_pipeline(args.gt, args.docs)
+        result, blocks, entities = run_pipeline(args.gt, args.docs, args.split)
         print(format_report(result))
         if args.diagnose:
-            print("\n" + diagnose(result, blocks, entities))
+            print("\n" + diagnose(result, blocks, entities, args.show_values))
         return 0
     if args.demo:
         _demo(args.gt)

@@ -84,6 +84,12 @@ def test_no_email_no_result():
     "98765 43210",
     "9876543210",
     "022 2345 6789",
+    # Outside real number ranges, so libphonenumber rejects them;
+    # caught by the "+country code" fallback.
+    "+1 (555) 0142",
+    "+1 (555) 555-0142",
+    "+44 20 5555 0101",
+    "+91 55555 01234",
 ])
 def test_phone_formats(phone):
     """Detect phone numbers in several common international formats."""
@@ -100,10 +106,23 @@ def test_phone_formats(phone):
     assert block.text[phones[0].start:phones[0].end] == phone
 
 
+def test_phone_does_not_swallow_next_table_column():
+    """A number followed by another column keeps only the number."""
+
+    block = make("Marta Szewczyk +48 512 555 0180 30 Krakow")
+
+    phones = [e.value for e in detect([block]) if e.pii_type == "PHONE"]
+
+    assert phones == ["+48 512 555 0180"]
+
+
 @pytest.mark.parametrize("text", [
     "Code 12345 is ready",
     "Date: 2026-10-07",
     "Ref 12345678901234567890 end",
+    "Score +12 34 points",
+    # An exception ID and a score in adjacent table columns.
+    "EXC-2026-036 18.3",
 ])
 def test_phone_not_matched(text):
     """Reject examples that should not be identified as phone numbers."""
@@ -144,6 +163,8 @@ def test_does_not_detect_date_as_phone():
     ("EMP-38104", "Employee ID: EMP-38104"),
     # Parentheses stay outside the span.
     ("EMP-37655", "Employee ID: (EMP-37655)"),
+    # OCR inserted a space after the hyphen.
+    ("EMP- 41501", "Employee ID: EMP- 41501"),
 ])
 def test_employee_id_formats(employee_id, text):
     """Detect employee IDs in the supported formats."""
@@ -201,6 +222,20 @@ def test_ssn_formats(ssn):
     assert len(ssns) == 1
     assert ssns[0].value == ssn
     assert block.text[ssns[0].start:ssns[0].end] == ssn
+
+
+@pytest.mark.parametrize("text, pii_type, digits", [
+    ("charges on your Platinum card ending 2218.", "CREDIT_CARD", "2218"),
+    ("the account ending in 0042 was closed", "ACCOUNT", "0042"),
+    ("the last four digits of your social security number (8827)", "SSN", "8827"),
+])
+def test_last_four_digits_in_context(text, pii_type, digits):
+    """The last four digits of a card, account or SSN still identify it."""
+
+    found = [(e.pii_type, e.value) for e in detect([make(text)])
+             if e.detector == "regex.last_digits"]
+
+    assert found == [(pii_type, digits)]
 
 
 @pytest.mark.parametrize("text", [
@@ -305,6 +340,7 @@ def test_invalid_passport_not_detected(text):
     ("Born on 7 March 2001", "7 March 2001"),
     ("DOB: 1985-08-23", "1985-08-23"),
     ("D.O.B: 14-Jul-1981", "14-Jul-1981"),
+    ("your date of birth, 3 August 1996", "3 August 1996"),
 ])
 def test_dob_formats(text, expected_date):
     """Detect supported date formats when a birth-related label is present."""
@@ -416,11 +452,15 @@ def test_all_caps_person_detection():
 
 
 # GLiNER scores "Sales Director" (0.74) like real names ("R. Kumar" 0.78),
-# so no threshold separates them. Fix with negative examples when training
-# the ML layer; strict=True makes this test fail once that works.
-@pytest.mark.xfail(strict=True, reason="GLiNER tags job titles as PERSON")
-def test_job_title_not_detected_as_person():
-    entities = detect([make("Contact the Sales Director for details")])
+# so no threshold separates them; a "job title" sink label and role-word
+# trimming in detector.py keep titles out.
+@pytest.mark.parametrize("text", [
+    "Contact the Sales Director for details",
+    "Independent reporting line: the Data Protection Officer reports to the board.",
+    "Escalate to the VP Information Security.",
+])
+def test_job_title_not_detected_as_person(text):
+    entities = detect([make(text)])
 
     assert [e for e in entities if e.pii_type == "PERSON"] == []
 

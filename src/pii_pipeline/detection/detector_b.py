@@ -4,10 +4,9 @@ GLiNER-based supplementary PII detector.
 This module uses GLiNER, a named-entity recognition model, to identify
 potential PII entities that may be missed by rule-based detection.
 
-The detector currently focuses on:
-- Person names
-- Addresses
-- Street addresses
+The detector returns person names only. Address, organization and job
+title labels are offered to the model but their spans are discarded
+(see _LABEL_MAP).
 
 GLiNER predictions are treated as candidates, not guaranteed truths.
 The integration checks confidence thresholds and character offsets
@@ -17,8 +16,6 @@ Limitations:
 - Predictions may contain false positives or miss real PII.
 - A confidence score is not necessarily a calibrated probability.
 - The model may return spans that include contextual labels.
-- Address components may be detected separately rather than as one
-  complete address.
 """
 
 import re
@@ -48,10 +45,17 @@ _model = None
 # extra labels steal spans: with "location" in the list, "Mumbai" in
 # an address became a location and was thrown away. Structured PII
 # (emails, phones, IDs) is left to Detector A.
+#
+# None marks a sink label: its spans are dropped, but offering it keeps
+# addresses and company names from being called people. Addresses are
+# left to the US address rule and the Indian address model: on the
+# Cadence documents GLiNER's address spans were fragments (0 of 69 right).
 _LABEL_MAP = {
     "person": "PERSON",
-    "address": "ADDRESS",
-    "street address": "ADDRESS",
+    "address": None,
+    "street address": None,
+    "organization": None,
+    "job title": None,   # "Data Protection Officer" is a role, not a name
 }
 _LABELS = list(_LABEL_MAP)
 
@@ -106,7 +110,7 @@ def detect_with_gliner(
         original-text offsets, confidence score, detector identifier,
         and detected text value.
 
-    Only person-name and address-related predictions are retained
+    Only person-name predictions are retained
     by the current filtering policy.
     """
 
@@ -144,6 +148,8 @@ def detect_with_gliner(
 
                 pii_type = _LABEL_MAP[prediction["label"]]
 
+                if pii_type is None:
+                    continue
                 if pii_type == "PERSON" and value.lower() in _PRONOUNS:
                     continue
 

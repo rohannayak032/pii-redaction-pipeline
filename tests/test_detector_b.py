@@ -35,24 +35,18 @@ def test_gliner_detects_person_name():
 
 
 # =========================================================
-# ADDRESS DETECTION
+# ADDRESS AND ORGANIZATION SINK LABELS
 # =========================================================
 
-def test_gliner_detects_address_component():
-    """Verify that GLiNER identifies a street-address component."""
+def test_gliner_returns_no_address_and_does_not_call_it_a_person():
+    """Addresses go to the address rules; GLiNER's sink label keeps them
+    from being returned as people."""
 
-    address = "1180 Ashwood Lane"
-    block = make(f"Home address: {address}, Jersey City, NJ 07302")
+    block = make("Home address: 1180 Ashwood Lane, Jersey City, NJ 07302")
 
-    # Analyze a sample address containing street, city, and region details.
     entities = detect_with_gliner([block])
 
-    # Keep entities mapped to the ADDRESS category.
-    addresses = [e for e in entities if e.pii_type == "ADDRESS"]
-
-    # Confirm that the street-address component is detected.
-    # This test does not require the entire postal address to be one entity.
-    assert any(e.value == address for e in addresses)
+    assert entities == []
 
 
 # =========================================================
@@ -140,14 +134,12 @@ def test_gliner_finds_name_after_model_input_limit():
     assert [block.text[e.start:e.end] for e in persons] == ["Priya Nair"]
 
 
-def test_gliner_keeps_city_in_address():
-    """A city inside an address must not be lost as an unused 'location' label."""
+def test_gliner_does_not_call_a_company_a_person():
+    """The organization sink label keeps company names out of PERSON."""
 
-    block = make("She lives in Andheri East, Mumbai 400069.")
+    block = make("The assessment was performed by Optiv for Cadence Financial Group.")
 
-    values = [e.value for e in detect_with_gliner([block]) if e.pii_type == "ADDRESS"]
-
-    assert any("Mumbai" in v for v in values)
+    assert [e for e in detect_with_gliner([block]) if e.pii_type == "PERSON"] == []
 
 
 def test_gliner_ignores_pronouns():
