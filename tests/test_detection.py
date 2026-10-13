@@ -238,6 +238,15 @@ def test_last_four_digits_in_context(text, pii_type, digits):
     assert found == [(pii_type, digits)]
 
 
+def test_ip_address_detected():
+    """IP addresses identify a device and its user."""
+
+    found = [(e.pii_type, e.value) for e in detect([make("Login from 203.0.113.42 at 09:14")])
+             if e.pii_type == "IP"]
+
+    assert found == [("IP", "203.0.113.42")]
+
+
 @pytest.mark.parametrize("text", [
     "805520432",
     "80-552-0432",

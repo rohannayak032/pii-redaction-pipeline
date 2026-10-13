@@ -183,6 +183,9 @@ def _clean_person(entity: Entity, text: str) -> list[Entity]:
 
     trimmed = []
     for segment in segments:
+        # An all-caps run of 4+ words is a heading ("MEASURE TARGET MEASURE OWNER").
+        if len(segment) >= 4 and all(t[2].isupper() for t in segment):
+            continue
         mixed_case = any(not t[2].isupper() for t in segment)
         while segment and _is_junk(segment[0][2], mixed_case):
             segment = segment[1:]

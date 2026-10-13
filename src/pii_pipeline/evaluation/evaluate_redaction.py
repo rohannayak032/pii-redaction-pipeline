@@ -32,6 +32,11 @@ Run ``python evaluate_redaction.py --selftest`` for the built-in tests, or
 To score the real pipeline (prints only the metrics table)::
 
     python -m pii_pipeline.evaluation.evaluate_redaction --gt GT.csv --docs A.pdf B.docx [--diagnose]
+
+``--docs`` also takes blocks saved by ``python -m pii_pipeline.extraction
+FILE --out data/extracted/x.jsonl`` (skips OCR). ``--split dev`` scores the
+non-PDF files plus PDF odd pages, ``--split test`` the PDF even pages.
+``--show-values`` adds document values to ``--diagnose``: local use only.
 """
 
 from __future__ import annotations

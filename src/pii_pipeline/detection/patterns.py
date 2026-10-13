@@ -57,6 +57,7 @@ PRESIDIO_TYPES = {
     "PERSON": "PERSON",
     "IN_AADHAAR": "AADHAAR",
     "IN_PASSPORT": "PASSPORT",
+    "IP_ADDRESS": "IP",     # Presidio's built-in recognizer validates IPv4/IPv6
 }
 
 # Two all-caps words in a row, e.g. "PRIYA NAIR". spaCy misses
