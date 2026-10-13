@@ -11,6 +11,8 @@ cities or a lone 6-digit number is not an address, and the models tag
 those even outside addresses.
 """
 
+import re
+
 from transformers import pipeline
 
 from pii_pipeline.schemas import TextBlock, Entity
@@ -28,6 +30,26 @@ MODEL = "PhoenixKnight/indian-address-tinybert-ft"
 _MAX_GAP = 40
 # An address needs two different component types at most this far apart.
 _CORE_GAP = 12
+
+# On non-Indian documents the model tags headings, IDs and table rows as
+# addresses, so a span is kept only if it has a 6-digit PIN code or names
+# an Indian state, union territory or major city.
+# shortcut: city list covers big cities only; extend it if real addresses with neither PIN nor state get dropped.
+_INDIAN_SIGNAL = re.compile(
+    # PIN not inside a longer number, so phone fragments like "212 555-0147" don't count.
+    r"(?<![\d+-])(?<![\d+-]\s)[1-9]\d{2}\s?\d{3}(?!\s?[\d-])"
+    r"|\b(?:India|Andhra|Arunachal|Assam|Bihar|Chhattisgarh|Goa|Gujarat|Haryana|Himachal"
+    r"|Jharkhand|Karnataka|Kerala|Madhya Pradesh|Maharashtra|Manipur|Meghalaya|Mizoram"
+    r"|Nagaland|Odisha|Orissa|Punjab|Rajasthan|Sikkim|Tamil\s?Nadu|Telangana|Tripura"
+    r"|Uttar Pradesh|Uttarakhand|West Bengal|Delhi|Jammu|Kashmir|Ladakh|Puducherry"
+    r"|Pondicherry|Chandigarh|Andaman|Lakshadweep|Dadra|Daman"
+    r"|Mumbai|Bombay|Bengaluru|Bangalore|Hyderabad|Ahmedabad|Chennai|Madras|Kolkata"
+    r"|Calcutta|Pune|Jaipur|Lucknow|Kanpur|Nagpur|Indore|Thane|Bhopal|Visakhapatnam"
+    r"|Patna|Vadodara|Ghaziabad|Ludhiana|Agra|Nashik|Noida|Gurugram|Gurgaon|Coimbatore"
+    r"|Kochi|Cochin|Mysuru|Mysore|Surat|Guwahati|Bhubaneswar|Thiruvananthapuram"
+    r"|Dehradun|Ranchi|Raipur|Amritsar|Varanasi|Madurai|Vijayawada)\b",
+    re.IGNORECASE,
+)
 
 # Loading a model is expensive, so each one is loaded once.
 _models: dict = {}
@@ -105,7 +127,7 @@ def detect_indian_addresses(blocks: list[TextBlock], model: str = MODEL) -> list
             # Tokenizers may include leading spaces in a span.
             lead = len(value) - len(value.lstrip())
             start, value = start + lead, value.strip()
-            if not value:
+            if not value or not _INDIAN_SIGNAL.search(value):
                 continue
             entities.append(
                 Entity(

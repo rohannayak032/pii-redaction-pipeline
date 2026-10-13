@@ -378,6 +378,18 @@ def test_us_address_covers_city_state_and_zip():
     assert found == [address]
 
 
+def test_us_address_includes_trailing_country():
+    address = "245 Hudson Street, New York, NY 10013, United States"
+    block = make(f"Cadence Financial Group, Inc. | {address} Policy queries")
+
+    found = [
+        block.text[e.start:e.end] for e in detect([block])
+        if e.detector == "regex.us_address"
+    ]
+
+    assert found == [address]
+
+
 # =========================================================
 # PERSON TESTS
 # =========================================================
@@ -512,3 +524,18 @@ def test_indian_address_detected_as_one_span():
     assert found[0].pii_type == "ADDRESS"
     assert found[0].start <= block.text.index(address)
     assert found[0].end >= block.text.index(address) + len(address)
+
+
+@pytest.mark.parametrize("value, kept", [
+    ("Flat 12B, MG Road, Indiranagar, Bengaluru 560038", True),
+    ("12 Park Street, Kolkata", True),
+    ("House 4, Sector 9, 560 038", True),
+    ("QR.85 | PLACE: Due Diligence Questionnaire", False),
+    ("12.6 Closure and verification", False),
+    ("Achebe, +1 212 555-0147", False),
+])
+def test_indian_address_needs_pin_or_place_name(value, kept):
+    """The address model's spans are kept only with an Indian signal."""
+    from pii_pipeline.detection.detector_address import _INDIAN_SIGNAL
+
+    assert bool(_INDIAN_SIGNAL.search(value)) is kept

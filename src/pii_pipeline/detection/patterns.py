@@ -120,7 +120,8 @@ US_ADDRESS = re.compile(
     r"(?:Street|St|Avenue|Ave|Road|Rd|Lane|Ln|Court|Ct|Crescent|Drive|Dr|Boulevard|Blvd|Way|Place|Pl|Terrace|Square)\b\.?"
     r"(?:,?[ \t]*(?:Apartment|Apt|Suite|Ste|Unit|Floor)[ \t]*[\w-]+)?"
     r"(?:,[ \t]*[A-Z][A-Za-z.' -]+)?"
-    r"(?:,[ \t]*[A-Z]{2}[ \t]+\d{5}(?:-\d{4})?)?"
+    r"(?:,[ \t]*[A-Z]{2}[ \t]+\d{5}(?:-\d{4})?"
+    r"(?:,[ \t]*(?:United States(?: of America)?|USA|U\.S\.A?\.?))?)?"
 )
 
 
