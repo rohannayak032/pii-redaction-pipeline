@@ -3,8 +3,11 @@
 The evaluator answers two questions for every ground-truth entity:
 
 1. Was it *detected*?  A predicted entity must have the same ``file``, the
-   same PII type and overlapping character offsets (``start`` inclusive,
-   ``end`` exclusive).
+   same PII type and a matching value (equal, or one containing the other).
+   Offsets are not compared: the ground truth has no ``block_index`` and its
+   offsets are not in extraction's block coordinates. Overlapping predictions
+   are first merged the way redaction merges them, so each replaced span
+   counts once.
 2. Was it really *redacted*?  The original value must no longer appear in the
    text of the ``RedactedBlock`` objects returned by ``redact_document``.
 
@@ -26,6 +29,9 @@ Accuracy  = TP / (TP + FP + FN)
 
 Run ``python evaluate_redaction.py --selftest`` for the built-in tests, or
 ``python evaluate_redaction.py --demo --gt ground_truth.csv`` for a demo.
+To score the real pipeline (prints only the metrics table)::
+
+    python -m pii_pipeline.evaluation.evaluate_redaction --gt GT.csv --docs A.pdf B.docx
 """
 
 from __future__ import annotations
@@ -137,19 +143,36 @@ def entities_to_spans(entities: Sequence[Any]) -> List[Span]:
     ]
 
 
-def _overlap_ratio(a: Span, b: Span) -> float:
-    """Intersection-over-union of two half-open character ranges.
+def merge_overlaps(entities: Sequence[Any]) -> List[Any]:
+    """Collapse overlapping predictions per block the way redaction does.
 
-    If either span has no offsets (some ground-truth rows only give a value),
-    fall back to comparing the whitespace-normalised values: 1.0 if equal.
+    The merged span takes the winner's type (redaction's ``resolve_overlaps``)
+    and its value is rebuilt from the members, which cover the union.
     """
-    if a.start is None or b.start is None or a.end is None or b.end is None:
-        return 1.0 if a.value and _squash(a.value) == _squash(b.value) else 0.0
-    inter = min(a.end, b.end) - max(a.start, b.start)
-    if inter <= 0:
-        return 0.0
-    union = max(a.end, b.end) - min(a.start, b.start)
-    return inter / union
+    from pii_pipeline.redaction import resolve_overlaps
+
+    by_block: Dict[Tuple[str, int], List[Any]] = defaultdict(list)
+    for e in entities:
+        by_block[(e.file, e.block_index)].append(e)
+    merged: List[Any] = []
+    for (file, block_index), group in by_block.items():
+        chars = {e.start + i: ch for e in group for i, ch in enumerate(e.value)}
+        for s in resolve_overlaps(group):
+            merged.append(SimpleNamespace(
+                file=file, block_index=block_index, start=s.start, end=s.end,
+                pii_type=s.pii_type,
+                value="".join(chars[i] for i in range(s.start, s.end))))
+    return merged
+
+
+def _overlap_ratio(a: Span, b: Span) -> float:
+    """Value overlap: len(shorter) / len(longer) if one contains the other.
+
+    Values are whitespace-normalised. For nested spans this equals their
+    intersection-over-union, without needing offsets in the same coordinates.
+    """
+    x, y = sorted((_squash(a.value), _squash(b.value)), key=len)
+    return len(x) / len(y) if x and x in y else 0.0
 
 
 def _squash(text: str) -> str:
@@ -212,7 +235,7 @@ def evaluate_redaction(
         redacted_blocks: Output blocks of ``redact_document``. Each should
             expose ``file`` and the redacted text (``text``/``redacted_text``).
         iou_threshold: Minimum overlap (0-1] for a prediction to count as
-            matching a ground-truth span. Use ``1.0`` for exact offsets.
+            matching a ground-truth value. Use ``1.0`` for exact values.
         require_type_match: If True, PII types must agree to match.
         check_redaction: If True, a detected value that still appears in the
             redacted text is counted as a miss (FN), not a TP.
@@ -225,8 +248,16 @@ def evaluate_redaction(
         raise ValueError("iou_threshold must be in (0, 1].")
 
     truth = load_ground_truth(ground_truth_csv)
-    preds = entities_to_spans(predicted_entities)
+    preds = entities_to_spans(merge_overlaps(predicted_entities))
     warnings: List[str] = []
+
+    # Score only files that were run, so a held-out document is not counted as missed.
+    run_files = {getattr(b, "file", None) for b in redacted_blocks}
+    if run_files:
+        skipped = sum(g.file not in run_files for g in truth)
+        truth = [g for g in truth if g.file in run_files]
+        if skipped:
+            warnings.append(f"{skipped} ground-truth rows skipped: their files were not run.")
 
     texts, text_found = _collect_redacted_text(redacted_blocks)
     leak_check = check_redaction and text_found
@@ -321,9 +352,9 @@ def format_report(result: Dict[str, Any]) -> str:
 # --------------------------------------------------------------------------- #
 # Tests (run with `pytest evaluate_redaction.py` or `--selftest`)
 # --------------------------------------------------------------------------- #
-def _entity(file: str, t: str, start: int, end: int, value: str) -> Any:
+def _entity(file: str, t: str, start: int, end: int, value: str, block: int = 0) -> Any:
     """Minimal stand-in for the pipeline's Entity (see make_entity)."""
-    return SimpleNamespace(file=file, block_index=0, start=start, end=end,
+    return SimpleNamespace(file=file, block_index=block, start=start, end=end,
                            pii_type=t, confidence=0.95, detector="test",
                            value=value)
 
@@ -416,6 +447,29 @@ def test_none_rows_and_missing_offsets(tmp_path: Any) -> None:
     assert out["overall"]["fn"] == 0
 
 
+def test_ground_truth_offsets_are_not_block_offsets(tmp_path: Any) -> None:
+    gt = _write_gt(tmp_path)
+    preds = [_entity("a.txt", "EMAIL", 100, 109, "bob@x.com", block=3),
+             _entity("a.txt", "PHONE", 5, 15, "9876543210", block=7)]
+    out = evaluate_redaction(gt, preds, [_block("a.txt", "[E] [P]")])
+    assert out["overall"]["tp"] == 2 and out["overall"]["fp"] == 0
+
+
+def test_overlapping_predictions_count_once(tmp_path: Any) -> None:
+    gt = _write_gt(tmp_path)
+    preds = [_entity("a.txt", "EMAIL", 0, 9, "bob@x.com"),
+             _entity("a.txt", "NAME", 0, 3, "bob"),
+             _entity("a.txt", "PHONE", 20, 30, "9876543210")]
+    out = evaluate_redaction(gt, preds, [_block("a.txt", "[EMAIL_1] [PHONE_1]")])
+    assert out["overall"]["tp"] == 2 and out["overall"]["fp"] == 0
+
+
+def test_files_that_were_not_run_are_skipped(tmp_path: Any) -> None:
+    gt = _write_gt(tmp_path)
+    out = evaluate_redaction(gt, [], [_block("b.txt", "nothing here")])
+    assert out["overall"]["fn"] == 0 and len(out["warnings"]) == 1
+
+
 def _run_selftests() -> int:
     import tempfile
     from pathlib import Path
@@ -447,7 +501,7 @@ def _demo(gt_path: str) -> None:
             continue  # missed entirely
         start = g.start if g.start is not None else 0
         end = g.end if g.end is not None else len(g.value)
-        preds.append(_entity(g.file, g.pii_type, start, end, g.value))
+        preds.append(_entity(g.file, g.pii_type, start, end, g.value, block=i))
         if i % 15 == 14:
             leaked_values[g.file].append(g.value)  # detected but not removed
     for f in sorted({g.file for g in truth})[:3]:
@@ -459,15 +513,35 @@ def _demo(gt_path: str) -> None:
     print(format_report(evaluate_redaction(gt_path, preds, blocks)))
 
 
+def run_pipeline(gt_path: str, docs: Sequence[str]) -> Dict[str, Any]:
+    """Extract, detect and redact ``docs``, then score them.
+
+    File names must match the CSV's ``file`` column.
+    """
+    from pii_pipeline.detection.detector import detect
+    from pii_pipeline.extraction import extract_document
+    from pii_pipeline.redaction import redact_document
+
+    blocks = [b for doc in docs for b in extract_document(doc)]
+    entities = detect(blocks)
+    redacted, _ = redact_document(blocks, entities)
+    return evaluate_redaction(gt_path, entities, redacted)
+
+
 def main(argv: Optional[Iterable[str]] = None) -> int:
     """CLI entry point."""
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--gt", default="ground_truth.csv")
     ap.add_argument("--demo", action="store_true", help="run a simulated demo")
     ap.add_argument("--selftest", action="store_true", help="run unit tests")
+    ap.add_argument("--docs", nargs="+",
+                    help="run the real pipeline on these files and print the metrics table")
     args = ap.parse_args(argv)
     if args.selftest:
         return _run_selftests()
+    if args.docs:
+        print(format_report(run_pipeline(args.gt, args.docs)))
+        return 0
     if args.demo:
         _demo(args.gt)
         return 0
