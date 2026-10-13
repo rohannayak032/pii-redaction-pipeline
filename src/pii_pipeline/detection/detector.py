@@ -285,15 +285,15 @@ def _clean_block(block: TextBlock, candidates: list[Entity]) -> list[Entity]:
     ]
 
 
-def _propagate_names(blocks: list[TextBlock], entities: list[Entity]) -> list[Entity]:
-    """Redact every repeat, in the same file, of a multi-word name found in it.
+def _propagate_values(blocks: list[TextBlock], entities: list[Entity]) -> list[Entity]:
+    """Redact every whole-word repeat, in the same file, of a value found in it.
 
-    The models miss some occurrences of a name they found elsewhere; an
-    unredacted repeat would leak it.
+    The detectors miss some occurrences of a value they found elsewhere; an
+    unredacted repeat would leak it. Same rule as the app's residual-leak check.
     """
     names: dict[str, dict[str, Entity]] = defaultdict(dict)
     for e in entities:
-        if e.pii_type == "PERSON" and len(e.value.split()) > 1:
+        if len(e.value.strip()) >= 3:
             names[e.file].setdefault(e.value, e)
 
     taken: dict[tuple[str, int], list[tuple[int, int]]] = defaultdict(list)
@@ -395,4 +395,4 @@ def detect(blocks: list[TextBlock]) -> list[Entity]:
             seen.add(key)
             entities.append(entity)
 
-    return _propagate_names(blocks, entities)
+    return _propagate_values(blocks, entities)

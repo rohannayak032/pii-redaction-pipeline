@@ -81,7 +81,7 @@ def residual_leaks(entities: List[Entity], redacted: List[RedactedBlock]) -> Lis
     """A detected value that still appears as a whole word in any redacted block (an undetected repeat)."""
     leaks = []
     for e in {e.value: e for e in entities if len(e.value.strip()) >= 3}.values():
-        # Whole-word match like detect's name propagation: "Ann" inside "Annual" is not a leak.
+        # Whole-word match like detect's value propagation: "Ann" inside "Annual" is not a leak.
         word = re.compile(r"(?<!\w)" + re.escape(e.value) + r"(?!\w)")
         where = next((b.location for b in redacted if word.search(b.text)), None)
         if where is not None:

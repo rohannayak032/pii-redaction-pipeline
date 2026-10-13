@@ -244,6 +244,13 @@ def test_repeats_of_a_found_name_are_redacted(monkeypatch):
         (0, "Tobias Lindqvist", "presidio"), (1, "Tobias Lindqvist", "propagated")]
 
 
+def test_repeats_of_any_found_value_are_redacted(monkeypatch):
+    blocks = [make_block("Mail ops@acme.io now", 0), make_block("cc ops@acme.io", 1)]
+    result = run(monkeypatch, blocks,
+                 lambda b: [span(b, "ops@acme.io", "EMAIL")] if b.index == 0 else [])
+    assert [(e.block_index, e.pii_type, e.detector) for e in result] == [
+        (0, "EMAIL", "presidio"), (1, "EMAIL", "propagated")]
+
 def test_detectors_lists_every_detector_name():
     """Every detector name written in the detection code is in DETECTORS."""
     import re
