@@ -31,14 +31,15 @@ Run ``python evaluate_redaction.py --selftest`` for the built-in tests, or
 ``python evaluate_redaction.py --demo --gt ground_truth.csv`` for a demo.
 To score the real pipeline (prints only the metrics table)::
 
-    python -m pii_pipeline.evaluation.evaluate_redaction --gt GT.csv --docs A.pdf B.docx
+    python -m pii_pipeline.evaluation.evaluate_redaction --gt GT.csv --docs A.pdf B.docx [--diagnose]
 """
 
 from __future__ import annotations
 
 import argparse
+import re
 import sys
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
@@ -470,6 +471,17 @@ def test_files_that_were_not_run_are_skipped(tmp_path: Any) -> None:
     assert out["overall"]["fn"] == 0 and len(out["warnings"]) == 1
 
 
+def test_diagnose_shows_shapes_not_values(tmp_path: Any) -> None:
+    gt = _write_gt(tmp_path)
+    blocks = [SimpleNamespace(file="a.txt", index=0, text="bob@x.com 9876543210 Alice")]
+    preds = [_entity("a.txt", "EMAIL", 0, 9, "bob@x.com"),
+             _entity("a.txt", "NAME", 21, 26, "Alice")]
+    result = evaluate_redaction(gt, preds, [_block("a.txt", "[E] 9876543210 [N]")])
+    report = diagnose(result, blocks, preds)
+    assert "9999999999" in report and "not detected" in report
+    assert not any(v in report for v in ("bob@x.com", "9876543210", "Alice"))
+
+
 def _run_selftests() -> int:
     import tempfile
     from pathlib import Path
@@ -513,10 +525,11 @@ def _demo(gt_path: str) -> None:
     print(format_report(evaluate_redaction(gt_path, preds, blocks)))
 
 
-def run_pipeline(gt_path: str, docs: Sequence[str]) -> Dict[str, Any]:
+def run_pipeline(gt_path: str, docs: Sequence[str]) -> Tuple[Dict[str, Any], list, list]:
     """Extract, detect and redact ``docs``, then score them.
 
-    File names must match the CSV's ``file`` column.
+    File names must match the CSV's ``file`` column. Returns the result plus
+    the blocks and entities, for :func:`diagnose`.
     """
     from pii_pipeline.detection.detector import detect
     from pii_pipeline.extraction import extract_document
@@ -525,7 +538,52 @@ def run_pipeline(gt_path: str, docs: Sequence[str]) -> Dict[str, Any]:
     blocks = [b for doc in docs for b in extract_document(doc)]
     entities = detect(blocks)
     redacted, _ = redact_document(blocks, entities)
-    return evaluate_redaction(gt_path, entities, redacted)
+    return evaluate_redaction(gt_path, entities, redacted), blocks, entities
+
+
+def _shape(value: str) -> str:
+    """A value's format without its content: "EMP-12 x" -> "AAA-99 a"."""
+    return re.sub(r"[a-z]", "a", re.sub(r"[A-Z]", "A", re.sub(r"\d", "9", _squash(value))))[:40]
+
+
+def diagnose(result: Dict[str, Any], blocks: Sequence[Any], entities: Sequence[Any]) -> str:
+    """Why ground truth was missed and what false positives look like.
+
+    Shows only counts and value shapes, never values, so it is safe to share.
+    """
+    text: Dict[str, str] = defaultdict(str)
+    for b in blocks:
+        text[b.file] += "\n" + _squash(b.text)
+    preds = entities_to_spans(merge_overlaps(entities))
+    causes: Counter = Counter()
+    shapes: Dict[str, Counter] = defaultdict(Counter)
+    for m in result["details"]["missed"]:
+        v, f, t = _squash(m["value"]), m["file"], m["type"]
+        if v not in text[f]:
+            cause = "not in extracted text"
+        elif any(p.file == f and p.value and (v in _squash(p.value) or _squash(p.value) in v)
+                 for p in preds):
+            cause = "found, wrong type or span"
+        else:
+            cause = "not detected"
+        causes[(t, cause)] += 1
+        if t != "NAME":
+            shapes[t][_shape(v)] += 1
+    details = result["details"]
+    fps = details["false_positives"]
+    lines = ["MISSED by cause:"]
+    lines += [f"  {t:<12} {c:<27} {n}" for (t, c), n in sorted(causes.items())]
+    lines.append("MISSED value shapes (non-NAME):")
+    lines += [f"  {t}: {dict(c.most_common(8))}" for t, c in sorted(shapes.items())]
+    lines.append(f"LEAKED by type: {dict(Counter(m['type'] for m in details['leaked']))}")
+    lines.append(f"FALSE POSITIVES by type: {dict(Counter(p['type'] for p in fps))}")
+    lines.append("FP shapes (non-NAME): "
+                 f"{dict(Counter((p['type'], _shape(p['value'])) for p in fps if p['type'] != 'NAME').most_common(10))}")
+    lines.append("NAME FP word counts: "
+                 f"{dict(sorted(Counter(len(p['value'].split()) for p in fps if p['type'] == 'NAME').items()))}")
+    lines.append("RAW detections by type/detector: "
+                 f"{dict(Counter((e.pii_type, e.detector.split(':')[0]) for e in entities))}")
+    return "\n".join(lines)
 
 
 def main(argv: Optional[Iterable[str]] = None) -> int:
@@ -536,11 +594,16 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     ap.add_argument("--selftest", action="store_true", help="run unit tests")
     ap.add_argument("--docs", nargs="+",
                     help="run the real pipeline on these files and print the metrics table")
+    ap.add_argument("--diagnose", action="store_true",
+                    help="with --docs: also print miss causes and value shapes (no values)")
     args = ap.parse_args(argv)
     if args.selftest:
         return _run_selftests()
     if args.docs:
-        print(format_report(run_pipeline(args.gt, args.docs)))
+        result, blocks, entities = run_pipeline(args.gt, args.docs)
+        print(format_report(result))
+        if args.diagnose:
+            print("\n" + diagnose(result, blocks, entities))
         return 0
     if args.demo:
         _demo(args.gt)
