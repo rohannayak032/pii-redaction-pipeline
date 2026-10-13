@@ -3,6 +3,6 @@
 set -e
 cd "$(dirname "$0")"
 if [ ! -d frontend/dist ]; then (cd frontend && npm install && npm run build); fi
-cd backend
-pip install -q -r requirements.txt
-python -m uvicorn server:app --host 127.0.0.1 --port 8000
+pip install -q -r backend/requirements.txt
+cd ../../..
+python -m uvicorn --app-dir src pii_pipeline.app.backend.server:app --host 127.0.0.1 --port 8000

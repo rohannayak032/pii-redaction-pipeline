@@ -1,12 +1,19 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "./api";
 import {
   Alert, BarChart, ClearedBadge, DataTable, Expander, Metric, MultiSelect,
-  RiskBadge, SearchInput, Select, SensitiveValue, SeverityBadge, StatusBadge,
-  Tabs, pct,
+  SearchInput, Select, StatusBadge, Tabs, pct,
 } from "./ui";
 
-const PLACEHOLDER_RE = /\[[A-Z][A-Z_]*_\d+\]/g;
+const PLACEHOLDER_RE = /\[[A-Z][A-Z0-9_]*_\d+\]/g;
+
+const sumValues = (o) => Object.values(o || {}).reduce((a, b) => a + b, 0);
+const conf = (c) => (c != null ? `${(c * 100).toFixed(0)}%` : "-");
+
+function addCounts(target, counts) {
+  Object.entries(counts || {}).forEach(([k, v]) => { target[k] = (target[k] || 0) + v; });
+  return target;
+}
 
 // ─── Redacted text renderer with highlighted placeholders ─────────────────────
 function HighlightedText({ text }) {
@@ -23,33 +30,19 @@ function HighlightedText({ text }) {
   return <>{parts}</>;
 }
 
-// ─── Get original value from ephemeral in-memory map ─────────────────────────
-function getOriginal(entity, result, corrMap) {
-  if (!corrMap) return null;
-  const key = `${result.filename}::${entity.n || entity.placeholder || `${entity.block}_${entity.start}`}`;
-  if (corrMap.entityMap?.has(key)) return corrMap.entityMap.get(key);
-  if (entity.placeholder && corrMap.placeholderMap?.has(entity.placeholder)) {
-    return corrMap.placeholderMap.get(entity.placeholder);
-  }
-  return null;
-}
-
-// ─── Expandable detail panel for a single entity ─────────────────────────────
-function EntityDetail({ entity, result, corrMap }) {
-  const original = getOriginal(entity, result, corrMap);
-  const available = corrMap?.isClientExtracted === true || !!original;
+// ─── Expandable detail panel for one detection (Entity.public_info + location) ─
+function EntityDetail({ entity }) {
   const rows = [
-    ["PII Type", entity.entity_type],
-    ["Severity", <SeverityBadge key="s" s={entity.severity} />],
+    ["PII Type", entity.pii_type],
     ["Placeholder", <code key="ph">{entity.placeholder || "-"}</code>],
     ["Confidence", entity.confidence != null ? `${(entity.confidence * 100).toFixed(1)}%` : "-"],
-    ["Detector", entity.detector || "-"],
-    ["Source File", result.filename],
-    ["Block #", entity.block != null ? entity.block : "-"],
-    ["Page / Slide", entity.page || "-"],
+    ["Detector", entity.detector],
+    ["Source File", entity.file],
+    ["Block index", entity.block_index],
+    ["Page / Slide", entity.page ?? "-"],
     ["Location", entity.location || "-"],
-    ["Char start", entity.start != null ? entity.start : "-"],
-    ["Char end", entity.end != null ? entity.end : "-"],
+    ["Char start", entity.start],
+    ["Char end", entity.end],
   ];
   return (
     <div className="entity-detail">
@@ -60,67 +53,61 @@ function EntityDetail({ entity, result, corrMap }) {
             <span className="entity-detail-val">{val ?? "-"}</span>
           </div>
         ))}
-        <div className="entity-detail-row">
-          <span className="entity-detail-label">
-            Original Value
-            <span className="badge badge--warn" style={{ marginLeft: 6, fontSize: "0.65rem" }}>Sensitive</span>
-          </span>
-          <span className="entity-detail-val">
-            <SensitiveValue value={original} available={available} />
-          </span>
-        </div>
       </div>
-      {!available && (
-        <p className="entity-detail-note">
-          ℹ Original value is available only for plain text files (.txt) during the current session.
-          For PDF, DOCX, and PPTX the raw PII stays inside the server process (by design) and is never sent to the browser.
-        </p>
-      )}
+      <p className="entity-detail-note">
+        Offsets refer to the original block text. The original value never leaves the server.
+      </p>
     </div>
   );
+}
+
+function ExtractionWarnings({ warnings }) {
+  if (!warnings.length) return null;
+  const cols = [
+    { key: "code", label: "Code", render: (w) => <code>{w.code}</code> },
+    { key: "location", label: "Location", className: "wrap" },
+    { key: "detail", label: "Detail", className: "wrap" },
+  ];
+  return <DataTable columns={cols} rows={warnings} noMax />;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // OVERVIEW TAB
 // ─────────────────────────────────────────────────────────────────────────────
 export function OverviewTab({ results }) {
-  const totals = useMemo(() => {
-    const t = {};
-    results.forEach((r) => Object.entries(r.categories).forEach(([k, v]) => { t[k] = (t[k] || 0) + v; }));
-    return t;
-  }, [results]);
+  const byType = useMemo(() => results.reduce((t, r) => addCounts(t, r.report.summary.by_pii_type), {}), [results]);
+  const byDetector = useMemo(() => results.reduce((t, r) => addCounts(t, r.detectors), {}), [results]);
 
   const cols = [
     { key: "filename", label: "File", className: "wrap", render: (r) => <span title={r.filename}>{r.filename}</span> },
     { key: "file_type", label: "Type", render: (r) => r.file_type?.toUpperCase() || "-" },
     { key: "status", label: "Status", render: (r) => <StatusBadge status={r.status} /> },
-    { key: "risk", label: "Risk", render: (r) => <RiskBadge risk={r.risk} /> },
     { key: "pages", label: "Pages", render: (r) => r.pages.length, className: "num" },
-    { key: "pii", label: "PII Found", render: (r) => r.entities.length, className: "num" },
-    { key: "cats", label: "Categories", className: "wrap",
-      render: (r) => Object.entries(r.categories).map(([k, v]) => `${k} ×${v}`).join(", ") || "—" },
+    { key: "block_count", label: "Blocks", className: "num" },
+    { key: "det", label: "Detections", render: (r) => r.entities.length, className: "num" },
+    { key: "red", label: "Redactions", render: (r) => r.records.length, className: "num" },
+    { key: "cats", label: "Redactions by type", className: "wrap",
+      render: (r) => Object.entries(r.report.summary.by_pii_type).map(([k, v]) => `${k} ×${v}`).join(", ") || "—" },
     { key: "llm_ready", label: "LLM Ready", render: (r) => <ClearedBadge ready={r.llm_ready} /> },
-    { key: "time", label: "Time (s)", className: "num",
-      render: (r) => (Object.values(r.timings || {}).reduce((a, b) => a + b, 0) * 1).toFixed(2) },
+    { key: "time", label: "Time (s)", className: "num", render: (r) => sumValues(r.timings).toFixed(2) },
   ];
-
-  const rows = results.map((r) => ({ ...r }));
 
   const expandRow = (r) => {
     if (r.status === "failed") {
-      return <Alert kind="error"><b>{r.failed_stage || "processing"} failed:</b> {r.error}</Alert>;
+      return <Alert kind="error"><b>{r.failed_stage} failed:</b> {r.error}</Alert>;
     }
+    const x = r.extraction;
     return (
       <div style={{ padding: "12px 4px" }}>
-        {r.warnings.length > 0 && r.warnings.map((w, i) => <Alert key={i} kind="warning">{w}</Alert>)}
-        {r.leaks.length > 0 && r.leaks.map((l, i) => <Alert key={i} kind="error">{l}</Alert>)}
-        {!r.warnings.length && !r.leaks.length && (
-          <Alert kind="success">No warnings or leaks for this file.</Alert>
-        )}
+        {r.leaks.map((l, i) => <Alert key={i} kind="error">{l}</Alert>)}
+        {!x.warnings.length && !r.leaks.length && <Alert kind="success">No extraction warnings or residual leaks for this file.</Alert>}
+        <ExtractionWarnings warnings={x.warnings} />
         <div className="metrics-grid metrics-grid--compact" style={{ marginTop: 12 }}>
-          <Metric label="Blocks" value={r.block_count} />
-          <Metric label="Non-PII preserved" value={pct(r.non_pii_preserved)} help="Demo proxy metric" />
-          {r.lowest_ocr != null && <Metric label="Lowest OCR" value={r.lowest_ocr.toFixed(2)} />}
+          <Metric label="Characters" value={x.characters.toLocaleString()} />
+          <Metric label="OCR blocks" value={x.ocr_blocks} />
+          {x.lowest_ocr != null && <Metric label="Lowest OCR conf." value={pct(x.lowest_ocr)} />}
+          <Metric label="Hidden blocks" value={x.hidden_blocks} />
+          <Metric label="Placeholders" value={r.placeholders.length} />
         </div>
       </div>
     );
@@ -128,14 +115,20 @@ export function OverviewTab({ results }) {
 
   return (
     <div className="panel">
-      <DataTable columns={cols} rows={rows} expandRow={expandRow} empty="No results yet." />
-      {Object.keys(totals).length > 0 && (
+      <DataTable columns={cols} rows={results} expandRow={expandRow} empty="No results yet." />
+      {Object.keys(byType).length > 0 && (
         <div className="chart-section">
-          <h4 className="chart-title">PII Distribution by Category</h4>
-          <BarChart data={totals} />
+          <h4 className="chart-title">Redactions by PII type</h4>
+          <BarChart data={byType} />
         </div>
       )}
-      {!results.some((r) => r.entities.length > 0) && results.length > 0 && (
+      {Object.keys(byDetector).length > 0 && (
+        <div className="chart-section">
+          <h4 className="chart-title">Detections by detector</h4>
+          <BarChart data={byDetector} />
+        </div>
+      )}
+      {!results.some((r) => r.entities.length > 0) && results.some((r) => r.status !== "failed") && (
         <Alert kind="success">No PII detected in any processed file.</Alert>
       )}
     </div>
@@ -143,206 +136,75 @@ export function OverviewTab({ results }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FINDINGS TAB — searchable, filterable cross-file findings table
+// FINDINGS TAB — searchable, filterable cross-file detections
 // ─────────────────────────────────────────────────────────────────────────────
-export function FindingsTab({ results, originalValueMaps = [] }) {
+function DetectionsTable({ rows, showFile }) {
   const [search, setSearch] = useState("");
-  const [filterType, setFilterType] = useState([]);
-  const [filterFile, setFilterFile] = useState([]);
-  const [filterSev, setFilterSev] = useState([]);
-  const [showOriginal, setShowOriginal] = useState(false);
+  const [types, setTypes] = useState([]);
+  const [detectors, setDetectors] = useState([]);
+  const [files, setFiles] = useState([]);
+  const [pages, setPages] = useState([]);
 
-  const allFindings = useMemo(() => {
-    const out = [];
-    results.forEach((r, ri) => {
-      const corrMap = originalValueMaps[ri];
-      r.entities.forEach((e) => {
-        const original = getOriginal(e, r, corrMap);
-        const available = corrMap?.isClientExtracted === true || !!original;
-        out.push({ ...e, filename: r.filename, _result: r, _corrMap: corrMap, _original: original, _origAvailable: available });
-      });
-    });
-    return out;
-  }, [results, originalValueMaps]);
-
-  const allTypes = useMemo(() => [...new Set(allFindings.map((e) => e.entity_type))].sort(), [allFindings]);
-  const allFiles = useMemo(() => [...new Set(results.map((r) => r.filename))], [results]);
-
-  const filtered = useMemo(() => {
-    const q = search.toLowerCase();
-    return allFindings.filter((e) => {
-      if (filterType.length && !filterType.includes(e.entity_type)) return false;
-      if (filterFile.length && !filterFile.includes(e.filename)) return false;
-      if (filterSev.length && !filterSev.includes(e.severity)) return false;
-      if (q && !e.entity_type.toLowerCase().includes(q) &&
-          !e.placeholder.toLowerCase().includes(q) &&
-          !e.filename.toLowerCase().includes(q) &&
-          !(e._original || "").toLowerCase().includes(q)) return false;
-      return true;
-    });
-  }, [allFindings, filterType, filterFile, filterSev, search]);
+  const options = (key) => [...new Set(rows.map((e) => e[key]))].filter((v) => v != null).sort((a, b) => (a > b ? 1 : -1));
+  const q = search.toLowerCase();
+  const filtered = rows.filter((e) =>
+    (!types.length || types.includes(e.pii_type)) &&
+    (!detectors.length || detectors.includes(e.detector)) &&
+    (!files.length || files.includes(e.file)) &&
+    (!pages.length || pages.includes(e.page)) &&
+    (!q || [e.pii_type, e.placeholder, e.file, e.location, e.detector].some((v) => (v || "").toLowerCase().includes(q))));
 
   const cols = [
     { key: "n", label: "#", className: "num" },
-    { key: "entity_type", label: "PII Type" },
-    { key: "severity", label: "Severity", render: (e) => <SeverityBadge s={e.severity} /> },
-    ...(showOriginal ? [{
-      key: "original", label: "Original Value",
-      render: (e) => <SensitiveValue value={e._original} available={e._origAvailable} />,
-    }] : []),
+    { key: "pii_type", label: "PII Type" },
     { key: "placeholder", label: "Placeholder", className: "nowrap", render: (e) => <code>{e.placeholder || "-"}</code> },
-    { key: "confidence", label: "Confidence", className: "num",
-      render: (e) => e.confidence != null ? `${(e.confidence * 100).toFixed(0)}%` : "-" },
-    { key: "filename", label: "File", className: "wrap", render: (e) => <span title={e.filename}>{e.filename}</span> },
-    { key: "page", label: "Page", className: "num" },
+    { key: "confidence", label: "Confidence", className: "num", render: (e) => conf(e.confidence) },
     { key: "detector", label: "Detector" },
+    ...(showFile ? [{ key: "file", label: "File", className: "wrap" }] : []),
+    { key: "page", label: "Page", className: "num" },
+    { key: "location", label: "Location", className: "wrap" },
   ];
 
-  const expandRow = (e) => (
-    <EntityDetail entity={e} result={e._result} corrMap={e._corrMap} />
-  );
-
-  if (!allFindings.length) {
-    return (
-      <div className="panel">
-        <Alert kind="success">No PII entities detected across all processed files.</Alert>
-      </div>
-    );
-  }
-
   return (
-    <div className="panel">
+    <>
       <div className="findings-toolbar">
-        <SearchInput value={search} onChange={setSearch} placeholder="Search type, placeholder, file…" />
+        <SearchInput value={search} onChange={setSearch} placeholder="Search type, placeholder, detector, location…" />
         <div className="findings-filters">
-          <MultiSelect label="PII Type" options={allTypes} value={filterType} onChange={setFilterType} />
-          <MultiSelect label="File" options={allFiles} value={filterFile} onChange={setFilterFile} />
-          <MultiSelect label="Severity" options={["High", "Medium", "Low"]} value={filterSev} onChange={setFilterSev} />
+          <MultiSelect label="PII Type" options={options("pii_type")} value={types} onChange={setTypes} />
+          <MultiSelect label="Detector" options={options("detector")} value={detectors} onChange={setDetectors} />
+          {showFile
+            ? <MultiSelect label="File" options={options("file")} value={files} onChange={setFiles} />
+            : <MultiSelect label="Page" options={options("page")} value={pages} onChange={setPages} />}
         </div>
-        <label className="toggle-check">
-          <input type="checkbox" checked={showOriginal} onChange={(e) => setShowOriginal(e.target.checked)} />
-          Show original values
-          <span className="badge badge--warn" style={{ marginLeft: 6, fontSize: "0.65rem" }}>Sensitive</span>
-        </label>
       </div>
-
-      <DataTable
-        columns={cols}
-        rows={filtered}
-        expandRow={expandRow}
-        empty="No findings match the current filters."
-      />
-
+      <DataTable columns={cols} rows={filtered} expandRow={(e) => <EntityDetail entity={e} />}
+        empty="No detections match the current filters." />
       <p className="findings-footer">
-        {filtered.length} of {allFindings.length} findings shown
-        {showOriginal && originalValueMaps.some((m) => !m?.isClientExtracted) && (
-          <span className="findings-note">
-            · Original values available for .txt files in this session only. Binary documents are protected server-side.
-          </span>
-        )}
+        {filtered.length} of {rows.length} detections shown · values stay on the server
       </p>
-    </div>
+    </>
   );
+}
+
+export function FindingsTab({ results }) {
+  const all = useMemo(() => results.flatMap((r) => r.entities), [results]);
+  if (!all.length) {
+    return <div className="panel"><Alert kind="success">No PII detected across the processed files.</Alert></div>;
+  }
+  return <div className="panel"><DetectionsTable rows={all} showFile /></div>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FILE DETAILS TAB
 // ─────────────────────────────────────────────────────────────────────────────
-const STAGE_HINTS = {
-  validation: "Check the file type/size or re-export the document.",
-  extraction: "The file may be encrypted, corrupt, or scanned — OCR is required by the extraction module.",
-  detection: "The detection module raised an error — see the processing log below.",
-  redaction: "The redaction module raised an error — see the processing log below.",
-};
-
-function EntitiesPane({ r, corrMap }) {
-  const [cats, setCats] = useState([]);
-  const [pgs, setPgs] = useState([]);
-  const [sev, setSev] = useState([]);
-  const [search, setSearch] = useState("");
-  const [showOriginal, setShowOriginal] = useState(false);
-
-  const all = r.entities;
-  const filtered = all.filter((e) => {
-    if (cats.length && !cats.includes(e.entity_type)) return false;
-    if (pgs.length && !pgs.includes(e.page)) return false;
-    if (sev.length && !sev.includes(e.severity)) return false;
-    if (search) {
-      const q = search.toLowerCase();
-      if (!e.entity_type.toLowerCase().includes(q) && !e.placeholder.toLowerCase().includes(q)) return false;
-    }
-    return true;
-  });
-
-  const cols = [
-    { key: "n", label: "#", className: "num" },
-    { key: "entity_type", label: "Type" },
-    { key: "severity", label: "Severity", render: (e) => <SeverityBadge s={e.severity} /> },
-    ...(showOriginal ? [{
-      key: "original", label: "Original Value",
-      render: (e) => <SensitiveValue value={getOriginal(e, r, corrMap)} available={corrMap?.isClientExtracted || !!getOriginal(e, r, corrMap)} />,
-    }] : []),
-    { key: "placeholder", label: "Placeholder", className: "nowrap", render: (e) => <code>{e.placeholder || "-"}</code> },
-    { key: "confidence", label: "Conf.", className: "num",
-      render: (e) => e.confidence != null ? `${(e.confidence * 100).toFixed(0)}%` : "-" },
-    { key: "page", label: "Page", className: "num" },
-    { key: "location", label: "Location", className: "wrap" },
-    { key: "detector", label: "Detector" },
-  ];
-
-  const expandRow = (e) => <EntityDetail entity={e} result={r} corrMap={corrMap} />;
-
-  if (all.length === 0) {
-    return (
-      <div className="panel">
-        <Alert kind="success">No PII entities detected in this file.</Alert>
-      </div>
-    );
-  }
-
-  return (
-    <div className="panel">
-      <div className="findings-toolbar">
-        <SearchInput value={search} onChange={setSearch} placeholder="Filter by type or placeholder…" />
-        <div className="findings-filters">
-          <MultiSelect label="PII Type" options={[...new Set(all.map((e) => e.entity_type))].sort()} value={cats} onChange={setCats} />
-          <MultiSelect label="Page" options={[...new Set(all.map((e) => e.page))].sort((a, b) => a - b)} value={pgs} onChange={setPgs} />
-          <MultiSelect label="Severity" options={["High", "Medium", "Low"]} value={sev} onChange={setSev} />
-        </div>
-        <label className="toggle-check">
-          <input type="checkbox" checked={showOriginal} onChange={(e) => setShowOriginal(e.target.checked)} />
-          Show originals
-          <span className="badge badge--warn" style={{ marginLeft: 6, fontSize: "0.65rem" }}>Sensitive</span>
-        </label>
-      </div>
-      <DataTable columns={cols} rows={filtered} expandRow={expandRow} empty="No findings match the filters." />
-      <p className="findings-footer">
-        {filtered.length} of {all.length} findings shown · Values are protected
-        {corrMap?.isClientExtracted
-          ? " · Original values derived from in-memory file text this session"
-          : " · Original values for binary files remain server-side only"}
-      </p>
-      {r.skipped_entities.length > 0 && (
-        <Expander title={`${r.skipped_entities.length} low-confidence finding(s) not redacted`}>
-          <DataTable
-            columns={cols.filter((c) => c.key !== "n" && c.key !== "original")}
-            rows={r.skipped_entities}
-            noMax
-          />
-        </Expander>
-      )}
-    </div>
-  );
-}
-
-function RedactedPane({ r }) {
-  const pages = r.pages;
+function RedactedPane({ r, runId }) {
+  const pages = r.pages.length ? r.pages : [null];
   const [page, setPage] = useState(pages[0]);
   const [copied, setCopied] = useState(false);
 
-  useEffect(() => setPage(r.pages[0]), [r]);
+  useEffect(() => setPage(pages[0]), [r]);   // eslint-disable-line react-hooks/exhaustive-deps
 
-  const blocks = r.aligned ? r.redacted.filter((b) => b.page === page) : r.redacted;
+  const blocks = page == null ? r.redacted : r.redacted.filter((b) => b.page === page);
   const fullText = blocks.map((b) => b.text).join("\n");
 
   const handleCopy = async () => {
@@ -358,7 +220,7 @@ function RedactedPane({ r }) {
   return (
     <div className="panel">
       <div className="redacted-toolbar">
-        {r.aligned && pages.length > 1 && (
+        {pages.length > 1 && (
           <div style={{ minWidth: 200 }}>
             <Select
               label="Page / slide"
@@ -373,12 +235,8 @@ function RedactedPane({ r }) {
             {copied ? "Copied" : "Copy Redacted Text"}
           </button>
           {r.llm_ready && (
-            <a
-              className="btn btn--sm"
-              href={`/api/runs/${r._runId}/files/${r.index}/redacted.txt`}
-              download
-              title="Download this file's redacted text"
-            >
+            <a className="btn btn--sm" href={`/api/runs/${runId}/files/${r.index}/redacted.txt`} download
+              title="Download this file's redacted text">
               Download .txt
             </a>
           )}
@@ -387,98 +245,149 @@ function RedactedPane({ r }) {
 
       <div className="redacted-preview">
         {blocks.length === 0 && <span className="muted">No redacted content for this page.</span>}
-        {blocks.map((b, i) => (
-          <div key={i} className="redacted-block">
-            {r.aligned && b.location && <div className="redacted-location">{b.location}</div>}
+        {blocks.map((b) => (
+          <div key={b.block_index} className="redacted-block">
+            <div className="redacted-location">{b.location}</div>
             <HighlightedText text={b.text} />
           </div>
         ))}
       </div>
       <p className="findings-footer">
-        Redacted text is the only content intended for the LLM.
-        Sensitive original values are intentionally excluded from this view.
+        Output of redaction.redact_document: the only content intended for the LLM.
       </p>
+    </div>
+  );
+}
+
+function ExtractionPane({ r }) {
+  const x = r.extraction;
+  const countCols = (label) => [
+    { key: "k", label },
+    { key: "v", label: "Blocks", className: "num" },
+  ];
+  const rows = (o) => Object.entries(o).map(([k, v]) => ({ k, v }));
+  return (
+    <div className="panel">
+      <div className="metrics-grid metrics-grid--compact">
+        <Metric label="Blocks" value={r.block_count} />
+        <Metric label="Pages / slides" value={r.pages.length} />
+        <Metric label="Characters" value={x.characters.toLocaleString()} />
+        <Metric label="Table rows" value={x.table_rows} />
+        <Metric label="Hidden blocks" value={x.hidden_blocks} help="Hidden slides, hidden text and similar content" />
+      </div>
+      <div className="metrics-grid metrics-grid--compact">
+        <Metric label="OCR blocks" value={x.ocr_blocks} />
+        <Metric label="Mean OCR conf." value={pct(x.mean_ocr)} />
+        <Metric label="Lowest OCR conf." value={pct(x.lowest_ocr)} />
+        <Metric label={`Below ${pct(x.low_ocr_threshold)}`} value={x.low_ocr_blocks}
+          help="OCR blocks the extraction module flags as unreliable" />
+      </div>
+      <div className="trace-section">
+        <h4 className="section-label">Blocks by source</h4>
+        <DataTable columns={countCols("Source")} rows={rows(x.sources)} noMax />
+      </div>
+      <div className="trace-section">
+        <h4 className="section-label">Blocks by kind</h4>
+        <DataTable columns={countCols("Kind")} rows={rows(x.kinds)} noMax />
+      </div>
+      <div className="trace-section">
+        <h4 className="section-label">Extraction warnings</h4>
+        {x.warnings.length
+          ? <ExtractionWarnings warnings={x.warnings} />
+          : <Alert kind="success">The extraction module raised no warnings for this file.</Alert>}
+      </div>
     </div>
   );
 }
 
 function TracePane({ r }) {
   const plCols = [
-    { key: "Placeholder", label: "Placeholder", render: (x) => <code>{x.Placeholder}</code> },
-    { key: "Type", label: "PII Type" },
-    { key: "Occurrences", label: "Occurrences", className: "num" },
-    { key: "Pages/Slides", label: "Pages / Slides" },
+    { key: "placeholder", label: "Placeholder", render: (x) => <code>{x.placeholder}</code> },
+    { key: "pii_type", label: "PII Type" },
+    { key: "occurrences", label: "Replacements", className: "num" },
+    { key: "detections", label: "Detections merged", className: "num" },
+    { key: "pages", label: "Pages / Slides", className: "wrap", render: (x) => x.pages.join(", ") || "-" },
   ];
-
-  // Category summary
-  const catSummary = Object.entries(r.categories || {}).map(([type, count]) => ({ type, count }));
+  const recCols = [
+    { key: "placeholder", label: "Placeholder", render: (x) => <code>{x.placeholder}</code> },
+    { key: "pii_type", label: "PII Type" },
+    { key: "page", label: "Page", className: "num" },
+    { key: "location", label: "Location", className: "wrap" },
+    { key: "start", label: "Start", className: "num" },
+    { key: "end", label: "End", className: "num" },
+    { key: "confidence", label: "Confidence", className: "num", render: (x) => conf(x.confidence) },
+    { key: "detector", label: "Winning detector" },
+    { key: "merged_entities", label: "Merged", className: "num" },
+  ];
+  const detCols = [
+    { key: "k", label: "Detector" },
+    { key: "v", label: "Detections", className: "num" },
+  ];
 
   return (
     <div className="panel">
-      {/* Category breakdown */}
-      {catSummary.length > 0 && (
-        <div className="trace-section">
-          <h4 className="section-label">Detection Summary by Category</h4>
-          <div className="category-grid">
-            {catSummary.map(({ type, count }) => (
-              <div key={type} className="category-card">
-                <span className="category-type">{type}</span>
-                <span className="category-count">{count}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      <div className="trace-section">
+        <h4 className="section-label">Verification</h4>
+        <Alert kind="success">
+          redaction.verify_redaction passed for all {r.block_count} blocks: text outside the replaced spans is unchanged,
+          every placeholder is in place, and every detected span is covered.
+        </Alert>
+        {r.leaks.length > 0
+          ? r.leaks.map((l, i) => <Alert key={i} kind="error">{l}</Alert>)
+          : <Alert kind="success">Residual check: no detected value appears anywhere in the redacted text.</Alert>}
+      </div>
 
-      {/* Placeholder table */}
+      <div className="trace-section">
+        <h4 className="section-label">Redactions by PII type</h4>
+        <div className="category-grid">
+          {Object.entries(r.report.summary.by_pii_type).map(([type, count]) => (
+            <div key={type} className="category-card">
+              <span className="category-type">{type}</span>
+              <span className="category-count">{count}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="trace-section">
+        <h4 className="section-label">Detections by detector</h4>
+        <DataTable columns={detCols} rows={Object.entries(r.detectors).map(([k, v]) => ({ k, v }))} noMax />
+      </div>
+
       {r.placeholders.length > 0 && (
         <div className="trace-section">
-          <h4 className="section-label">Placeholder Index</h4>
+          <h4 className="section-label">Placeholder index</h4>
           <p className="trace-note">
-            Same original value → same placeholder within the file. A placeholder cannot be reversed without the original value.
+            The same value gets the same placeholder throughout the file (PlaceholderManager). A placeholder cannot be
+            reversed without the original value.
           </p>
           <DataTable columns={plCols} rows={r.placeholders} />
         </div>
       )}
 
-      {/* Exposure report */}
-      <div className="trace-section">
-        <h4 className="section-label">Exposure Report <span className="muted">(type, location, confidence — no raw values)</span></h4>
+      {r.records.length > 0 && (
+        <div className="trace-section">
+          <h4 className="section-label">Trace records <span className="muted">(one per replaced span)</span></h4>
+          <DataTable columns={recCols} rows={r.records} />
+        </div>
+      )}
+
+      <Expander title="Exposure report (redaction.build_report: type, location, confidence; no raw values)">
         <pre className="code-block">{JSON.stringify(r.report, null, 2)}</pre>
-      </div>
-
-      {/* Verification status */}
-      <div className="trace-section">
-        <h4 className="section-label">Verification</h4>
-        {r.leaks.length > 0
-          ? r.leaks.map((l, i) => <Alert key={i} kind="error">{l}</Alert>)
-          : <Alert kind="success">Verification pass found no residual PII in the redacted output.</Alert>
-        }
-      </div>
-
-      {/* Teammate redaction report */}
-      {r.teammate_report_note && (
-        <Alert kind="warning">{r.teammate_report_note}</Alert>
-      )}
-      {!r.teammate_report_note && r.teammate_report != null && (
-        <Expander title="Report returned by the redaction module">
-          <pre className="code-block">
-            {typeof r.teammate_report === "string"
-              ? r.teammate_report
-              : JSON.stringify(r.teammate_report, null, 2)}
-          </pre>
-        </Expander>
-      )}
+      </Expander>
     </div>
   );
 }
 
-export function FileTab({ results, originalValueMaps = [] }) {
+export function FileTab({ runId, results }) {
   const [pick, setPick] = useState(0);
   const [inner, setInner] = useState("Detected PII");
   const idx = Math.min(pick, results.length - 1);
   const r = results[idx];
-  const corrMap = originalValueMaps[idx];
+  const stageCols = [
+    { key: "k", label: "Stage" },
+    { key: "v", label: "Seconds", className: "num", render: (x) => x.v.toFixed(3) },
+  ];
 
   return (
     <div className="panel">
@@ -491,62 +400,56 @@ export function FileTab({ results, originalValueMaps = [] }) {
         />
       </div>
 
-      {/* File status banner */}
       {r.status === "failed" ? (
-        <>
-          <Alert kind="error">
-            <strong>{r.failed_stage || "processing"} failed</strong> — {r.error}
-          </Alert>
-          {STAGE_HINTS[r.failed_stage] && (
-            <p className="findings-note">{STAGE_HINTS[r.failed_stage]}</p>
-          )}
-        </>
+        <Alert kind="error"><strong>{r.failed_stage} failed</strong> — {r.error}</Alert>
       ) : (
         <>
           {r.llm_ready
-            ? <Alert kind="success">Cleared for LLM — PII was replaced and the verification pass found nothing left.</Alert>
-            : <Alert kind="error">Not cleared for LLM — possible PII leak(s) remain. Do not forward this text.</Alert>
-          }
-          {r.warnings.map((w, i) => <Alert key={`w${i}`} kind="warning">{w}</Alert>)}
-          {r.leaks.map((l, i) => <Alert key={`l${i}`} kind="error">{l}</Alert>)}
+            ? <Alert kind="success">Cleared for LLM — redaction was verified and no detected value remains in the output.</Alert>
+            : <Alert kind="error">Not cleared for LLM — detected values remain in the redacted text. Do not forward it.</Alert>}
 
-          {/* File-level metrics */}
           <div className="metrics-grid metrics-grid--compact">
             <Metric label="Blocks" value={r.block_count} />
-            <Metric label="PII Entities" value={r.entities.length} accent={r.entities.length > 0} />
-            <Metric label="Skipped (low conf.)" value={r.skipped_entities.length} />
-            <Metric label="Non-PII preserved" value={pct(r.non_pii_preserved)} help="Demo proxy metric" />
-            {r.lowest_ocr != null && <Metric label="Lowest OCR" value={r.lowest_ocr.toFixed(2)} />}
+            <Metric label="Detections" value={r.entities.length} accent={r.entities.length > 0} />
+            <Metric label="Redactions" value={r.records.length} />
+            <Metric label="Placeholders" value={r.placeholders.length} />
+            <Metric label="Residual leaks" value={r.leaks.length} />
           </div>
 
-          {/* Inner tabs */}
           <Tabs
             inner
-            tabs={["Detected PII", "Redacted Text", "Traceability & Report"]}
+            tabs={["Detected PII", "Redacted Text", "Extraction", "Traceability & Report"]}
             value={inner}
             onChange={setInner}
           />
 
-          {inner === "Detected PII"          && <EntitiesPane r={r} corrMap={corrMap} />}
-          {inner === "Redacted Text"          && <RedactedPane r={r} />}
-          {inner === "Traceability & Report"  && <TracePane r={r} />}
+          {inner === "Detected PII" && (
+            <div className="panel">
+              {r.entities.length
+                ? <DetectionsTable key={r.filename} rows={r.entities} />
+                : <Alert kind="success">No PII detected in this file.</Alert>}
+            </div>
+          )}
+          {inner === "Redacted Text" && <RedactedPane r={r} runId={runId} />}
+          {inner === "Extraction" && <ExtractionPane r={r} />}
+          {inner === "Traceability & Report" && <TracePane r={r} />}
         </>
       )}
 
-      <Expander title="Processing log">
-        <pre className="code-block">{r.log?.join("\n") || "—"}</pre>
+      <Expander title="Stage timings">
+        <DataTable columns={stageCols} rows={Object.entries(r.timings).map(([k, v]) => ({ k, v }))} noMax />
       </Expander>
     </div>
   );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// EVALUATION TAB
+// EVALUATION TAB — evaluation.evaluate_redaction on this run
 // ─────────────────────────────────────────────────────────────────────────────
-export function EvalTab({ runId, results }) {
+export function EvalTab({ runId, results, cfg }) {
   const [gt, setGt] = useState(null);
-  const [partial, setPartial] = useState(false);
-  const [mtype, setMtype] = useState(false);
+  const [requireType, setRequireType] = useState(true);
+  const [exact, setExact] = useState(false);
   const [out, setOut] = useState(null);
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
@@ -555,74 +458,92 @@ export function EvalTab({ runId, results }) {
     if (!gt) { setOut(null); setErr(""); return; }
     let live = true;
     setLoading(true);
-    api.evaluate(runId, gt, partial, mtype)
+    api.evaluate(runId, gt, requireType, exact)
       .then((d) => { if (live) { setOut(d); setErr(""); setLoading(false); } })
       .catch((e) => { if (live) { setOut(null); setErr(e.message); setLoading(false); } });
     return () => { live = false; };
-  }, [gt, partial, mtype, runId, results]);
+  }, [gt, requireType, exact, runId, results]);
 
-  const fcols = ["File", "Ground truth", "Detected", "Hits", "False positives", "Missed (false negatives)", "Precision", "Recall"]
-    .map((k, i) => ({ key: k, label: k, className: i ? "num" : "wrap" }));
-  const tcols = ["Type", "Ground truth", "Found", "Recall"]
-    .map((k, i) => ({ key: k, label: k, className: i ? "num" : "" }));
+  const metricCols = ["tp", "fp", "fn", "precision", "recall", "f1", "accuracy"].map((k) => ({
+    key: k, label: k.length <= 2 ? k.toUpperCase() : k[0].toUpperCase() + k.slice(1), className: "num",
+    render: (x) => (k.length <= 2 ? x[k] : x[k].toFixed(3)),
+  }));
+  const fcols = [
+    { key: "file", label: "File", className: "wrap" },
+    { key: "support", label: "Labelled", className: "num" },
+    ...metricCols,
+    { key: "leaked", label: "Leaked", className: "num" },
+    { key: "repeats", label: "Repeats", className: "num" },
+  ];
+  const tcols = [{ key: "type", label: "Type" }, { key: "support", label: "Labelled", className: "num" }, ...metricCols];
 
   return (
     <div className="panel">
       <div className="eval-intro">
         <p>
-          Score detection accuracy against a <strong>ground truth</strong> file
-          (CSV or JSON with <code>filename</code>, <code>text</code>, optional <code>entity_type</code> columns).
+          Score this run with the team's evaluation module (<code>evaluate_redaction</code>) against a
+          ground-truth CSV with columns {cfg.gt_columns.map((c, i) => <span key={c}>{i ? ", " : ""}<code>{c}</code></span>)}.
+          A labelled value counts as found only if it was detected with the right type <em>and</em> is gone from the redacted text.
         </p>
         <p className="findings-note">
-          Ground truth data stays in memory only. Never commit it. The team's offline evaluation command is the source of official numbers.
+          Only metrics and counts come back from the server; missed and false-positive values are never sent to the browser.
         </p>
       </div>
 
       <div className="eval-controls">
         <label className="btn btn--ghost" style={{ cursor: "pointer" }}>
-          Choose ground truth file
-          <input type="file" accept=".csv,.json" hidden onChange={(e) => setGt(e.target.files[0] || null)} />
+          Choose ground truth CSV
+          <input type="file" accept=".csv" hidden onChange={(e) => setGt(e.target.files[0] || null)} />
         </label>
-        <span className="muted small">{gt ? gt.name : "No file selected (.csv or .json)"}</span>
-        {gt && (
-          <button className="icon-btn" title="Remove" onClick={() => setGt(null)}>✕</button>
-        )}
+        <span className="muted small">{gt ? gt.name : "No file selected"}</span>
+        {gt && <button className="icon-btn" title="Remove" onClick={() => setGt(null)}>✕</button>}
       </div>
 
       <div className="eval-options">
         <label className="toggle-check">
-          <input type="checkbox" checked={partial} onChange={(e) => setPartial(e.target.checked)} />
-          Count partial / overlapping matches as hits
+          <input type="checkbox" checked={requireType} onChange={(e) => setRequireType(e.target.checked)} />
+          Require the PII type to match
         </label>
         <label className="toggle-check">
-          <input type="checkbox" checked={mtype} onChange={(e) => setMtype(e.target.checked)} />
-          Also require the PII type to match
+          <input type="checkbox" checked={exact} onChange={(e) => setExact(e.target.checked)} />
+          Exact value match (otherwise ≥ 50% overlap of letters and digits)
         </label>
       </div>
 
       {loading && <Alert kind="info">Scoring…</Alert>}
       {err && <Alert kind="error">{err}</Alert>}
 
-      {out && (
-        out.files.length === 0
-          ? <Alert kind="warning">No filenames in the ground truth match the processed files.</Alert>
-          : (
-            <>
-              <h4 className="section-label">Per-File Results</h4>
-              <DataTable columns={fcols} rows={out.files} />
-              <div className="metrics-grid metrics-grid--compact">
-                <Metric label="Overall Recall" value={pct(out.summary?.recall)} help="True positives / ground truth count" />
-                <Metric label="Overall Precision" value={pct(out.summary?.precision)} help="(Detected - FP) / Detected" />
-                <Metric label="Missed Items" value={out.summary?.missed ?? "—"} />
-              </div>
-              {out.types.length > 0 && (
-                <>
-                  <h4 className="section-label" style={{ marginTop: 24 }}>Recall by PII Type</h4>
-                  <DataTable columns={tcols} rows={out.types} />
-                </>
-              )}
-            </>
-          )
+      {out && out.files.length === 0 && (
+        <Alert kind="warning">No file in the ground truth matches the processed files ({out.unlabelled.join(", ")}).</Alert>
+      )}
+      {out && out.files.length > 0 && (
+        <>
+          <div className="metrics-grid metrics-grid--compact">
+            <Metric label="Precision" value={pct(out.overall.precision)} help="TP / (TP + FP)" />
+            <Metric label="Recall" value={pct(out.overall.recall)} help="TP / (TP + FN)" />
+            <Metric label="F1" value={pct(out.overall.f1)} />
+            <Metric label="Accuracy" value={pct(out.overall.accuracy)} help="TP / (TP + FP + FN)" />
+          </div>
+          <div className="metrics-grid metrics-grid--compact">
+            <Metric label="Labelled PII" value={out.overall.support} />
+            <Metric label="Missed" value={out.counts.missed} help="Labelled values not detected with the right type" />
+            <Metric label="Leaked" value={out.counts.leaked} help="Detected, but still visible in the redacted text" />
+            <Metric label="False positives" value={out.counts.false_positives} />
+            <Metric label="Repeats (not FP)" value={out.counts.repeats} help="Further occurrences of a labelled value" />
+          </div>
+          {out.unlabelled.length > 0 && (
+            <Alert kind="warning">Not scored (no ground-truth rows): {out.unlabelled.join(", ")}</Alert>
+          )}
+          {out.warnings.map((w, i) => <Alert key={i} kind="info">{w}</Alert>)}
+
+          <h4 className="section-label">Per file</h4>
+          <DataTable columns={fcols} rows={out.files} noMax />
+          <h4 className="section-label" style={{ marginTop: 24 }}>Per PII type</h4>
+          <DataTable columns={tcols} rows={out.per_type} noMax />
+          <Expander title="Diagnosis (miss causes and value shapes, no values)">
+            <pre className="code-block">{out.diagnosis}</pre>
+          </Expander>
+        </>
       )}
     </div>
   );
@@ -635,7 +556,7 @@ export function ExportsTab({ runId, results }) {
   const ok = results.filter((r) => r.status !== "failed" && r.index >= 0);
   const [one, setOne] = useState(0);
   const sel = ok[Math.min(one, ok.length - 1)];
-  const hasFindings = ok.some((r) => r.entities.length > 0);
+  const hasFindings = ok.some((r) => r.records.length > 0);
   const cleared = results.some((r) => r.llm_ready);
 
   const link = (path, disabled) =>
@@ -646,19 +567,17 @@ export function ExportsTab({ runId, results }) {
   return (
     <div className="panel">
       <Alert kind="info">
-        All exports contain <strong>no raw PII values</strong>. Only placeholders, types, and metadata are included.
+        All exports contain <strong>no raw PII values</strong>: only placeholders, types, offsets and metadata.
       </Alert>
 
       <div className="exports-section">
         <h4 className="section-label">Bulk Exports</h4>
         <div className="dl-row">
           <a {...link("report.json", false)}>Export Report (JSON)</a>
-          <a {...link("findings.csv", !hasFindings)}>Export Findings (CSV)</a>
+          <a {...link("findings.csv", !hasFindings)}>Export Trace Records (CSV)</a>
           <a {...link("redacted.zip", !cleared)}>Download Redacted (ZIP)</a>
         </div>
-        {!cleared && (
-          <p className="findings-note">ZIP export disabled — no files are cleared for LLM yet.</p>
-        )}
+        {!cleared && <p className="findings-note">ZIP export disabled — no files are cleared for LLM.</p>}
       </div>
 
       {ok.length > 0 && (
@@ -672,17 +591,11 @@ export function ExportsTab({ runId, results }) {
               options={ok.map((r, i) => ({ value: i, label: r.filename }))}
             />
           </div>
-          {sel && (
-            <>
-              <div className="dl-row">
-                <a {...link(`files/${sel.index}/redacted.txt`, !sel.llm_ready)}>
-                  Download Redacted .txt
-                </a>
-              </div>
-              {!sel.llm_ready && (
-                <p className="findings-note">Disabled: this file is not cleared for LLM (possible leaks detected).</p>
-              )}
-            </>
+          <div className="dl-row">
+            <a {...link(`files/${sel.index}/redacted.txt`, !sel.llm_ready)}>Download Redacted .txt</a>
+          </div>
+          {!sel.llm_ready && (
+            <p className="findings-note">Disabled: this file is not cleared for LLM (residual leaks detected).</p>
           )}
         </div>
       )}

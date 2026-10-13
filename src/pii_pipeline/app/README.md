@@ -1,40 +1,40 @@
-# PII Shield (React + Python)
+# PII Shield (React + FastAPI)
 
-Same interface and features as the Streamlit app, rebuilt as a React front-end.
-Your pipeline code is reused **unchanged** (`pipeline.py`, `mock_modules.py`, `backend_config.py`).
+Web front-end for the team's pipeline. Every number on screen is an output of the real modules:
+
+| Step | Module call |
+|------|-------------|
+| Extraction | `pii_pipeline.extraction.extract_document_detailed` (blocks, block metadata, coded warnings) |
+| Detection | `pii_pipeline.detection.detector.detect` (rules + Presidio + GLiNER + TinyBERT address NER) |
+| Redaction | `pii_pipeline.redaction.redact_document` (verifies every block) and `build_report` |
+| Residual check | app: no detected value may appear anywhere in the redacted text |
+| Evaluation | `pii_pipeline.evaluation.evaluate_redaction.evaluate_redaction` and `diagnose` |
 
 ```
-pii-shield/
-  backend/    server.py (FastAPI)  + pipeline.py, mock_modules.py, backend_config.py, make_samples.py
-  frontend/   React (Vite) source; frontend/dist = ready-built UI
-  samples/    fake test files + ground_truth.csv
+app/
+  backend/    server.py (FastAPI) + pipeline.py (workflow layer)
+  frontend/   React (Vite) source; frontend/dist = built UI (git-ignored)
   start.sh / start.bat
 ```
 
-## Run (production style, one process)
+## Run
+Install the project requirements first (`pip install -r requirements.txt` at the repo root, plus Tesseract for OCR), then:
 ```
-./start.sh            # Windows: start.bat
+src/pii_pipeline/app/start.sh            # Windows: src\pii_pipeline\app\start.bat
 ```
-Open http://localhost:8000  (needs Python 3.10+; Node only if `frontend/dist` is missing or you edit the UI).
+Open http://localhost:8000. The first file is slow while the detection models load.
 
 ## Develop the UI (hot reload)
 ```
-cd backend  && pip install -r requirements.txt && python -m uvicorn server:app --port 8000
-cd frontend && npm install && npm run dev        # http://localhost:5173 (proxies /api to :8000)
+python -m uvicorn --app-dir src pii_pipeline.app.backend.server:app --port 8000   # from the repo root
+cd src/pii_pipeline/app/frontend && npm install && npm run dev                      # http://localhost:5173
 ```
 
-## How it maps to the Streamlit app
-| Streamlit                         | Now                                                    |
-|-----------------------------------|--------------------------------------------------------|
-| `app.py` UI                       | `frontend/src/*` (React)                               |
-| `P.process_document(...)`         | `POST /api/runs/{id}/process` in `server.py`           |
-| `P.evaluate_detection(...)`       | `POST /api/runs/{id}/evaluate`                         |
-| download buttons                  | `GET /api/runs/{id}/report.json, findings.csv, redacted.zip, files/{n}/redacted.txt` |
-| sidebar settings (removed)        | fixed defaults; env vars `PII_FORCE_MOCK`, `PII_STRICT_REAL`, `PII_MIN_CONFIDENCE` |
-
-Connecting the team's real modules is unchanged: edit `backend/backend_config.py`.
-Theme: Light / Dark / System switch (top right), remembered in the browser.
+## Evaluation tab
+Upload a ground-truth CSV with columns `file, case_id, type, value, location, start, end`
+(e.g. `src/pii_pipeline/evaluation/ground_truth_cadence_updated_with_addresses.csv`).
+Rows are matched to processed files by the `file` column, so upload the documents under the same names.
 
 ## Privacy
-Raw PII and original block text never leave the server process and are never in any API response.
-Results are held in memory per run (max 20) so exports/evaluation work; **Clear all** deletes the run.
+Raw PII and original block text never leave the server process and are never in any API response or export.
+Results are held in memory per run (max 20) so exports and evaluation work; **Clear all** deletes the run.

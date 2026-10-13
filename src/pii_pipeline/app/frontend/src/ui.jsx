@@ -332,58 +332,9 @@ export const StatusBadge = ({ status }) => {
   return <span className={`badge ${cls}`}>{label}</span>;
 };
 
-const SEV_MAP = {
-  High:   "badge--err",
-  Medium: "badge--warn",
-  Low:    "badge--ok",
-};
-export const SeverityBadge = ({ s }) => (
-  <span className={`badge ${SEV_MAP[s] || "badge--ok"}`}>{s}</span>
-);
-
-export const RiskBadge = ({ risk }) => {
-  const cls = risk === "High" ? "badge--err" : risk === "Medium" ? "badge--warn" : risk === "None found" ? "badge--ok" : "badge--info";
-  return <span className={`badge ${cls}`}>{risk}</span>;
-};
-
 export const ClearedBadge = ({ ready }) => (
   <span className={`badge ${ready ? "badge--ok" : "badge--err"}`}>{ready ? "Cleared" : "Not cleared"}</span>
 );
-
-// ─── Sensitive value toggle ───────────────────────────────────────────────────
-// Shows masked PII with per-row eye-toggle. Never logs values.
-export function SensitiveValue({ value, available = true }) {
-  const [revealed, setRevealed] = useState(false);
-  if (!available || !value) {
-    return <span className="muted" style={{ fontSize: "0.82rem" }}>— unavailable</span>;
-  }
-  return (
-    <span className="sensitive-wrap">
-      <span className={`sensitive-val${revealed ? " revealed" : ""}`}>
-        {revealed ? value : "•".repeat(Math.min(value.length, 12))}
-      </span>
-      <button
-        className="eye-btn"
-        title={revealed ? "Hide value" : "Reveal value"}
-        onClick={() => setRevealed((v) => !v)}
-        type="button"
-        aria-label={revealed ? "Hide PII value" : "Show PII value"}
-      >
-        {revealed ? (
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
-            <line x1="1" y1="1" x2="23" y2="23" />
-          </svg>
-        ) : (
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-            <circle cx="12" cy="12" r="3" />
-          </svg>
-        )}
-      </button>
-    </span>
-  );
-}
 
 // ─── Format a confidence float as percentage ──────────────────────────────────
 export const pct = (x) => (x == null ? "n/a" : `${(x * 100).toFixed(1)}%`);

@@ -1367,45 +1367,6 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; font-size: 0.88r
 .badge--err  { color: var(--err);  background: var(--err-bg);  border-color: var(--err-bd); }
 .badge--warn { color: var(--warn); background: var(--warn-bg); border-color: var(--warn-bd); }
 .badge--info { color: var(--info); background: var(--info-bg); border-color: var(--info-bd); }
-
-/* ─── Sensitive Value (Mask / Reveal) ─────────────────────────────────────── */
-.sensitive-wrap {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.sensitive-val {
-  font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size: 0.88em;
-  letter-spacing: 0.08em;
-  color: var(--text-muted);
-  background: var(--bg-subtle);
-  padding: 1px 6px;
-  border-radius: 4px;
-  border: 1px solid var(--border);
-  transition: all 0.15s;
-}
-
-.sensitive-val.revealed {
-  color: var(--text-primary);
-  background: var(--warn-bg);
-  border-color: var(--warn-bd);
-}
-
-.eye-btn {
-  border: none;
-  background: transparent;
-  cursor: pointer;
-  font-size: 0.9rem;
-  padding: 0;
-  color: var(--text-muted);
-  line-height: 1;
-  transition: color 0.12s;
-}
-
-.eye-btn:hover { color: var(--accent); }
-
 /* ─── Entity Detail Panel ─────────────────────────────────────────────────── */
 .entity-detail {
   padding: 16px 18px;

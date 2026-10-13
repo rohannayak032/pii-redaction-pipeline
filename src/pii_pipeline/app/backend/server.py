@@ -1,8 +1,10 @@
 """
 server.py - HTTP API for the React front-end.
 
-It only wraps the existing workflow layer (pipeline.py / mock_modules.py / backend_config.py), which are used
-UNCHANGED. Nothing here re-implements detection or redaction.
+It wraps the workflow layer (pipeline.py), which calls the team's real extraction, detection and redaction
+modules, and scores runs with the evaluation module. Nothing here re-implements detection or redaction.
+
+Run from the repository root:  python -m uvicorn --app-dir src pii_pipeline.app.backend.server:app
 
 Privacy: raw PII values stay inside the server process (in memory) and are never put in any response. Results are
 kept per "run" only so exports and ground-truth scoring can be done; "Clear all" deletes the run.
@@ -14,70 +16,31 @@ import io
 import json
 import os
 import re
+import tempfile
 import threading
 import uuid
 import zipfile
 from collections import OrderedDict
 from pathlib import Path
-from typing import Dict, List
+from typing import List
 from urllib.parse import quote
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 
-import backend_config as cfg
-import pipeline as P
+from pii_pipeline.app.backend import pipeline as P
+from pii_pipeline.evaluation.evaluate_redaction import (REQUIRED_COLUMNS, diagnose, evaluate_redaction,
+                                                        load_ground_truth)
 
-# Fixed defaults (the settings panel was removed from the UI). Override with env vars if ever needed.
-SETTINGS = P.Settings(
-    force_mock=os.getenv("PII_FORCE_MOCK", "0") == "1",
-    strict_real=os.getenv("PII_STRICT_REAL", "0") == "1",
-    min_confidence=float(os.getenv("PII_MIN_CONFIDENCE", "0.0")),
-)
 MAX_RUNS = 20
 
 app = FastAPI(title="PII Shield API")
 _lock = threading.Lock()
 RUNS: "OrderedDict[str, List[P.DocResult]]" = OrderedDict()
 
-ENTITY_COLUMNS = ["#", "Type", "Severity", "Page/Slide", "Location", "Block", "Start", "End", "Confidence",
-                  "Detector", "Placeholder"]
-
-
-# ----------------------------------------------------------------- helpers
-def _jsonable(obj):
-    try:
-        return json.loads(json.dumps(obj, default=repr))
-    except Exception:
-        return repr(obj)
-
-
-def serialize(r: P.DocResult, idx: int) -> dict:
-    """View-model for the UI. No raw PII values and no original block text."""
-    rep, note = P.scrubbed_teammate_report(r)
-    keep = P.non_pii_preserved(r)
-    ocr = [b.ocr_confidence for b in r.blocks if b.ocr_confidence is not None]
-    if r.aligned:
-        redacted = [{"location": b.location, "page": b.page, "text": t} for b, t in zip(r.blocks, r.redacted_texts)]
-    else:
-        redacted = [{"location": "", "page": 1, "text": "\n".join(r.redacted_texts)}]
-    return {
-        "index": idx,
-        "filename": r.filename, "file_type": r.file_type, "status": r.status, "error": r.error,
-        "failed_stage": r.failed_stage, "risk": r.risk, "llm_ready": r.llm_ready, "aligned": r.aligned,
-        "pages": r.pages, "block_count": len(r.blocks), "categories": r.by_category(),
-        "warnings": r.warnings, "leaks": r.leaks, "timings": r.timings, "log": r.log, "backends": r.backends,
-        "entities": [dict(e.public(), n=i + 1) for i, e in enumerate(r.entities)],
-        "skipped_entities": [e.public() for e in r.skipped_entities],
-        "redacted": redacted,
-        "placeholders": P.placeholder_table(r),
-        "report": r.to_report(),
-        "teammate_report": _jsonable(rep) if rep is not None else None,
-        "teammate_report_note": note,
-        "non_pii_preserved": keep,
-        "lowest_ocr": min(ocr) if ocr else None,
-    }
+FINDING_COLUMNS = ["file", "page", "location", "block_index", "start", "end", "pii_type", "confidence",
+                   "detector", "placeholder", "merged_entities"]
 
 
 def get_run(run_id: str) -> List[P.DocResult]:
@@ -101,16 +64,7 @@ def stem(name: str) -> str:
 # ----------------------------------------------------------------- API
 @app.get("/api/config")
 def config():
-    return {
-        "max_file_mb": cfg.MAX_FILE_MB,
-        "supported": sorted(cfg.SUPPORTED_TYPES),          # with leading dot, sorted (as shown in the footer)
-        "types": cfg.SUPPORTED_TYPES,
-    }
-
-
-@app.get("/api/health")
-def health():
-    return {"ok": True, "backends": P.backend_status(SETTINGS)}
+    return {"max_file_mb": P.MAX_FILE_MB, "supported": P.SUPPORTED, "gt_columns": list(REQUIRED_COLUMNS)}
 
 
 @app.post("/api/runs")
@@ -133,67 +87,82 @@ def delete_run(run_id: str):
 @app.post("/api/runs/{run_id}/process")
 def process(run_id: str, file: UploadFile = File(...)):
     run = get_run(run_id)
-    data = file.file.read()
-    res = P.process_document(file.filename or "upload", data, SETTINGS)
+    res = P.process_document(file.filename or "upload", file.file.read())
     with _lock:
         run.append(res)
         idx = len(run) - 1
-    return serialize(res, idx)
+    return P.view(res, idx)
 
 
 @app.post("/api/runs/{run_id}/evaluate")
-def evaluate(run_id: str, ground_truth: UploadFile = File(...), partial: bool = Form(False),
-             match_type: bool = Form(False)):
-    run = get_run(run_id)
-    ok = [r for r in run if r.status != "failed"]
-    try:
-        raw = ground_truth.file.read().decode("utf-8-sig")
-        if (ground_truth.filename or "").lower().endswith(".json"):
-            data = json.loads(raw)
-            truth = data if isinstance(data, list) else data.get("entities", [])
-        else:
-            truth = list(csv.DictReader(io.StringIO(raw)))
-        files_rows, type_rows = P.evaluate_detection(ok, truth, partial, match_type)
-    except Exception as e:
-        raise HTTPException(400, f"Could not read or score the ground truth ({type(e).__name__}).")
-    summary = None
-    if files_rows:
-        gtn = sum(f["Ground truth"] for f in files_rows)
-        hits = sum(f["Hits"] for f in files_rows)
-        det = sum(f["Detected"] for f in files_rows)
-        fp = sum(f["False positives"] for f in files_rows)
-        summary = {"recall": hits / gtn if gtn else None, "precision": (det - fp) / det if det else None,
-                   "missed": sum(f["Missed (false negatives)"] for f in files_rows)}
-    return {"files": files_rows, "types": type_rows, "summary": summary}
+def evaluate(run_id: str, ground_truth: UploadFile = File(...), require_type: bool = Form(True),
+             exact: bool = Form(False)):
+    """Score the run with the evaluation module. Only counts and metrics are returned, never values."""
+    done = [r for r in get_run(run_id) if r.status != "failed"]
+    with tempfile.TemporaryDirectory(prefix="pii_gt_") as tmp:
+        gt = Path(tmp) / "ground_truth.csv"
+        gt.write_bytes(ground_truth.file.read())
+        try:
+            labelled = {s.file for s in load_ground_truth(str(gt))}
+        except Exception:   # the loader's messages quote whole rows, i.e. ground-truth values
+            raise HTTPException(400, "Could not read the ground truth. Expected a CSV with columns: "
+                                + ", ".join(REQUIRED_COLUMNS) + ".")
+        scored = [r for r in done if r.filename in labelled]
+        if not scored:
+            return {"files": [], "unlabelled": [r.filename for r in done]}
+
+        def score(results):
+            return evaluate_redaction(str(gt), [e for r in results for e in r.entities],
+                                      [b for r in results for b in r.redacted],
+                                      iou_threshold=1.0 if exact else 0.5, require_type_match=require_type)
+
+        def counts(result):
+            d = result["details"]
+            return {"missed": len(d["missed"]), "leaked": len(d["leaked"]),
+                    "false_positives": len(d["false_positives"]), "repeats": result["repeats"]}
+
+        total = score(scored)
+        files = []
+        for r in scored:
+            one = score([r])
+            files.append({"file": r.filename, **one["overall"], **counts(one)})
+        return {
+            "files": files,
+            "unlabelled": [r.filename for r in done if r.filename not in labelled],
+            "overall": total["overall"],
+            "per_type": [{"type": t, **m} for t, m in total["per_type"].items()],
+            "counts": counts(total),
+            "warnings": total["warnings"],
+            "diagnosis": diagnose(total, [b for r in scored for b in r.extraction.blocks],
+                                  [e for r in scored for e in r.entities]),
+        }
 
 
 # ----------------------------------------------------------------- exports
 @app.get("/api/runs/{run_id}/report.json")
 def export_report(run_id: str):
-    run = get_run(run_id)
-    body = json.dumps({"files": [r.to_report() for r in run]}, indent=2, default=str)
-    return attachment(body.encode(), "application/json", "exposure_report.json")
+    files = []
+    for i, r in enumerate(get_run(run_id)):
+        v = P.view(r, i)
+        files.append({k: v[k] for k in ("filename", "sha256", "status", "error", "failed_stage", "llm_ready",
+                                        "block_count", "pages", "timings", "leaks", "extraction", "detectors",
+                                        "detected_types", "report")})
+    return attachment(json.dumps({"files": files}, indent=2).encode(), "application/json", "exposure_report.json")
 
 
 @app.get("/api/runs/{run_id}/findings.csv")
 def export_findings(run_id: str):
-    run = get_run(run_id)
     buf = io.StringIO()
-    w = csv.writer(buf)
-    w.writerow(ENTITY_COLUMNS + ["File"])
-    for r in [r for r in run if r.status != "failed"]:
-        for i, e in enumerate(r.entities):
-            p = e.public()
-            w.writerow([i + 1, p["entity_type"], p["severity"], p["page"], p["location"], p["block"],
-                        "" if p["start"] is None else p["start"], "" if p["end"] is None else p["end"],
-                        p["confidence"], p["detector"], p["placeholder"], r.filename])
+    w = csv.DictWriter(buf, FINDING_COLUMNS, extrasaction="ignore")
+    w.writeheader()
+    for i, r in enumerate(get_run(run_id)):
+        w.writerows(P.view(r, i)["records"])
     return attachment(buf.getvalue().encode("utf-8"), "text/csv", "findings.csv")
 
 
 @app.get("/api/runs/{run_id}/redacted.zip")
 def export_zip(run_id: str):
-    run = get_run(run_id)
-    cleared = [r for r in run if r.llm_ready]
+    cleared = [r for r in get_run(run_id) if r.llm_ready]
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         for i, r in enumerate(cleared):

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, correlateOriginalValues, failedStub, ALLOWED_EXTENSIONS, MAX_FILE_SIZE_MB, precheck } from "./api";
+import { api, failedStub, precheck } from "./api";
 import { EvalTab, ExportsTab, FileTab, FindingsTab, OverviewTab } from "./tabs";
 import { Alert, BrandShield, DynamicBackground, Metric, Tabs, ThemeSwitch, ThemeTransitionBeams, useTheme } from "./ui";
 
@@ -12,18 +12,12 @@ function fmtSize(bytes) {
 
 // ─── File type badge ────────────────────────────────────────────────────────────
 function FileTypeIcon({ type }) {
-  const labels = { pdf: "PDF", docx: "DOCX", pptx: "PPTX", txt: "TXT" };
-  const t = type || "-";
-  return (
-    <span className="file-type-badge">
-      {(labels[t] || t).toUpperCase()}
-    </span>
-  );
+  return <span className="file-type-badge">{(type || "-").toUpperCase()}</span>;
 }
 
 // ─── Supported format pill ─────────────────────────────────────────────────────
-function FormatPill({ label, ext }) {
-  return <span className="format-pill" title={ext}>{label}</span>;
+function FormatPill({ ext }) {
+  return <span className="format-pill" title={ext}>{ext.slice(1).toUpperCase()}</span>;
 }
 
 // ─── File queue row ────────────────────────────────────────────────────────────
@@ -57,7 +51,7 @@ function FileRow({ f, busy, onRemove }) {
 }
 
 // ─── Drop zone ────────────────────────────────────────────────────────────────
-function DropZone({ over, onDragOver, onDragLeave, onDrop, onBrowse, maxMb }) {
+function DropZone({ over, onDragOver, onDragLeave, onDrop, onBrowse, cfg }) {
   return (
     <div
       className={`dropzone${over ? " dropzone--active" : ""}`}
@@ -75,15 +69,12 @@ function DropZone({ over, onDragOver, onDragLeave, onDrop, onBrowse, maxMb }) {
       </div>
       <p className="dropzone-headline">Drag &amp; drop documents here</p>
       <p className="dropzone-sub">or</p>
-      <button className="btn btn--primary" onClick={onBrowse} type="button">
+      <button className="btn btn--primary" onClick={onBrowse} type="button" disabled={!cfg}>
         Browse Files
       </button>
       <div className="dropzone-formats">
-        <FormatPill label="PDF" ext=".pdf" />
-        <FormatPill label="DOCX" ext=".docx" />
-        <FormatPill label="PPTX" ext=".pptx" />
-        <FormatPill label="TXT" ext=".txt" />
-        <span className="dropzone-limit">· max {maxMb ?? MAX_FILE_SIZE_MB} MB per file</span>
+        {cfg?.supported.map((ext) => <FormatPill key={ext} ext={ext} />)}
+        {cfg && <span className="dropzone-limit">· max {cfg.max_file_mb} MB per file</span>}
       </div>
       <p className="dropzone-privacy">
         Raw PII values are never stored, logged, or exported
@@ -115,7 +106,6 @@ export default function App() {
   const [cfgErr, setCfgErr] = useState("");
   const [files, setFiles] = useState([]); // [{file, type, sizeKb, ok, msg, ext}]
   const [results, setResults] = useState([]);
-  const [originalValueMaps, setOriginalValueMaps] = useState([]); // per-result correlation maps
   const [runId, setRunId] = useState(null);
   const [busy, setBusy] = useState(null); // {i, n, name}
   const [over, setOver] = useState(false);
@@ -124,12 +114,12 @@ export default function App() {
   const inputRef = useRef(null);
   const resultsRef = useRef(null);
 
-  useEffect(() => { api.config().then(setCfg).catch((e) => setCfgErr(e.message)); }, []);
+  useEffect(() => { api.config().then(setCfg).catch((e) => setCfgErr(`Cannot reach the server: ${e.message}`)); }, []);
 
   // ── Add files with dedup + validation ───────────────────────────────────────
   const addFiles = useCallback(async (list) => {
-    const incoming = [...list];
-    const checked = await Promise.all(incoming.map((f) => precheck(f, cfg)));
+    if (!cfg) return;
+    const checked = [...list].map((f) => precheck(f, cfg));
     let dups = 0;
     setFiles((prev) => {
       const prevNames = new Set(prev.map((x) => x.file.name));
@@ -151,7 +141,6 @@ export default function App() {
     if (!validFiles.length || busy) return;
     if (runId) api.deleteRun(runId);
     setResults([]);
-    setOriginalValueMaps([]);
     setDupWarning("");
     let id;
     try {
@@ -162,24 +151,18 @@ export default function App() {
     }
     setRunId(id);
     const out = [];
-    const maps = [];
     for (let i = 0; i < validFiles.length; i++) {
       const f = validFiles[i].file;
       setBusy({ i, n: validFiles.length, name: f.name });
       try {
         const res = await api.process(id, f);
         out.push(res);
-        // Correlate original values securely in-memory
-        const corr = await correlateOriginalValues(f, res);
-        maps.push(corr);
       } catch (e) {
         out.push(failedStub(f.name, e.message));
-        maps.push({ filename: f.name, entityMap: new Map(), placeholderMap: new Map(), isClientExtracted: false });
       }
     }
     setBusy(null);
     setResults(out);
-    setOriginalValueMaps(maps);
     setTab("Overview");
     setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 80);
   };
@@ -189,7 +172,6 @@ export default function App() {
     if (runId) api.deleteRun(runId);
     setRunId(null);
     setResults([]);
-    setOriginalValueMaps([]);
     setFiles([]);
     setBusy(null);
     setCfgErr("");
@@ -208,7 +190,10 @@ export default function App() {
   const ok = results.filter((r) => r.status !== "failed");
   const validFiles = files.filter((f) => f.ok);
   const invalidFiles = files.filter((f) => !f.ok);
-  const totalPii = results.reduce((a, r) => a + r.entities.length, 0);
+  const totalDetections = results.reduce((a, r) => a + r.entities.length, 0);
+  const totalRedactions = results.reduce((a, r) => a + r.records.length, 0);
+  const totalLeaks = results.reduce((a, r) => a + r.leaks.length, 0);
+  const totalSeconds = results.reduce((a, r) => a + Object.values(r.timings).reduce((x, y) => x + y, 0), 0);
   const clearedCount = results.filter((r) => r.llm_ready).length;
 
   return (
@@ -241,12 +226,12 @@ export default function App() {
             <br />PII Before It Reaches an LLM
           </h1>
           <p className="hero-sub">
-            Production-grade privacy protection for enterprise documents
+            Extraction, detection, redaction and verification run on the server; the browser only receives redacted text and metadata
           </p>
           <div className="hero-badges">
-            <span className="hero-badge">Zero raw-PII export</span>
-            <span className="hero-badge">Regex + ML detection</span>
-            <span className="hero-badge">Verification pass</span>
+            <span className="hero-badge">No raw PII in any response</span>
+            <span className="hero-badge">Rules + ML detection</span>
+            <span className="hero-badge">Every block verified after redaction</span>
           </div>
         </section>
 
@@ -261,14 +246,14 @@ export default function App() {
             onDragLeave={onDragLeave}
             onDrop={onDrop}
             onBrowse={() => inputRef.current?.click()}
-            maxMb={cfg?.max_file_mb}
+            cfg={cfg}
           />
           <input
             ref={inputRef}
             type="file"
             multiple
             hidden
-            accept=".pdf,.docx,.pptx,.txt"
+            accept={cfg?.supported.join(",")}
             onChange={(e) => { if (e.target.files.length) addFiles(e.target.files); e.target.value = ""; }}
           />
         </section>
@@ -321,10 +306,10 @@ export default function App() {
         <ProgressBar busy={busy} />
 
         {/* ── Footer hint (pre-results) ── */}
-        {!results.length && !busy && (
+        {!results.length && !busy && cfg && (
           <div className="upload-footer">
-            Supported formats: {ALLOWED_EXTENSIONS.join(", ")} &nbsp;·&nbsp;
-            Max {cfg?.max_file_mb ?? MAX_FILE_SIZE_MB} MB per file &nbsp;·&nbsp;
+            Supported formats: {cfg.supported.join(", ")} &nbsp;·&nbsp;
+            Max {cfg.max_file_mb} MB per file &nbsp;·&nbsp;
             Raw PII values never leave the server
           </div>
         )}
@@ -342,12 +327,14 @@ export default function App() {
             {/* Summary metric cards */}
             <div className="metrics-grid">
               <Metric label="Files Processed" value={`${ok.length}/${results.length}`} />
-              <Metric label="PII Entities Found" value={totalPii} accent={totalPii > 0} />
-              <Metric label="Entities Redacted" value={ok.reduce((a, r) => a + r.entities.length, 0)} />
+              <Metric label="PII Detections" value={totalDetections} accent={totalDetections > 0}
+                help="Entities returned by detection.detect (overlapping detections included)" />
+              <Metric label="Redactions Applied" value={totalRedactions}
+                help="Replaced spans from redaction.redact_document (overlapping detections merged)" />
               <Metric label="Cleared for LLM" value={`${clearedCount}/${results.length}`} accent={clearedCount === results.length && results.length > 0} />
-              {results.some((r) => r.leaks?.length > 0) && (
-                <Metric label="Possible Leaks" value={results.reduce((a, r) => a + (r.leaks?.length || 0), 0)} />
-              )}
+              <Metric label="Residual Leaks" value={totalLeaks}
+                help="Detected values still found anywhere in the redacted text" />
+              <Metric label="Processing Time" value={`${totalSeconds.toFixed(1)} s`} />
             </div>
 
             {/* Tab navigation */}
@@ -359,8 +346,8 @@ export default function App() {
 
             <div className="tab-panel">
               {tab === "Overview" && <OverviewTab results={results} />}
-              {tab === "Findings" && <FindingsTab results={results} originalValueMaps={originalValueMaps} />}
-              {tab === "File Details" && <FileTab results={results} originalValueMaps={originalValueMaps} />}
+              {tab === "Findings" && <FindingsTab results={results} />}
+              {tab === "File Details" && <FileTab runId={runId} results={results} />}
               {tab === "Evaluation" && <EvalTab runId={runId} results={results} />}
               {tab === "Exports" && <ExportsTab runId={runId} results={results} />}
             </div>

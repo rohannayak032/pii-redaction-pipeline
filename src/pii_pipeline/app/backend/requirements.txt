@@ -1,9 +1,3 @@
 fastapi>=0.110
 uvicorn[standard]>=0.29
 python-multipart>=0.0.9
-# used by mock_modules.py (document extraction)
-pypdf
-python-docx
-python-pptx
-# only for make_samples.py
-fpdf2
