@@ -120,6 +120,10 @@ const zeros = (o) => Object.keys(o).filter((k) => o[k] === 0).join(", ") || "-";
 const demo = byName["sample_addresses.docx"];
 const demoAddressNer = demo.entities.filter((e) => e.detector.startsWith("address_ner")).length;
 const deployed = ADDR[0];
+// Address detections redacted under another label: redaction names a merged span after its highest-confidence member.
+const relabelled = demo.entities.filter((e) => e.detector.startsWith("address_ner") && !e.placeholder.startsWith("[ADDRESS"))
+  .map((e) => ({ e, by: demo.entities.filter((o) => o !== e && o.block_index === e.block_index
+    && o.start < e.end && e.start < o.end && o.confidence > e.confidence) }));
 // "MISSED by cause" lines of evaluation.diagnose: "  TYPE  cause  n"
 const causes = {};
 const typeCauses = {};
@@ -134,14 +138,15 @@ const zeroRecall = EVAL.per_type.filter((t) => t.support > 0 && t.tp === 0)
   .map((t) => `${t.type} (${t.support} labelled; ${(typeCauses[t.type] || []).join(", ")})`);
 const unlabelledTypes = EVAL.per_type.filter((t) => t.support === 0).map((t) => `${t.type} (${t.fp} detection)`);
 const observed = [
-  `sample.pdf was not cleared for the LLM: redaction verified all ${byName["sample.pdf"].block_count} blocks, but the residual check found ${byName["sample.pdf"].leaks.length} detected value(s) repeated in blocks where detection missed them: ${byName["sample.pdf"].leaks.join(" ")} This is the safety check working: the file's redacted text is withheld from the ZIP and .txt exports.`,
+  byName["sample.pdf"].leaks.length && `sample.pdf was not cleared for the LLM: redaction verified all ${byName["sample.pdf"].block_count} blocks, but the residual check found ${byName["sample.pdf"].leaks.length} detected value(s) repeated in blocks where detection missed them: ${byName["sample.pdf"].leaks.join(" ")} This is the safety check working: the file's redacted text is withheld from the ZIP and .txt exports.`,
   `sample.pdf is a scanned document: ${byName["sample.pdf"].extraction.sources.ocr || 0} of ${byName["sample.pdf"].block_count} blocks come from OCR, and ${byName["sample.pdf"].extraction.low_ocr_blocks} OCR blocks are below the ${byName["sample.pdf"].extraction.low_ocr_threshold} confidence threshold. Extraction (${secs(byName["sample.pdf"].timings.extraction)}) dominates its processing time.`,
   `sample.docx is image-heavy: ${byName["sample.docx"].extraction.ocr_blocks} OCR blocks with mean confidence ${pct(byName["sample.docx"].extraction.mean_ocr)}, ${byName["sample.docx"].extraction.low_ocr_blocks} of them below ${byName["sample.docx"].extraction.low_ocr_threshold}. Its recall (${pct(evalOf["sample.docx"].recall)}) is the lowest of the three labelled files. DOCX has no fixed pages, so its page count shows 0 and locations are paragraph/table positions.`,
   `Misses by cause (evaluation.diagnose): ${Object.entries(causes).map(([k, v]) => `${k} ${v}`).join(", ")}. "Not in extracted text" means the labelled value does not appear in the extracted text at all (for example text in an image that OCR skipped or misread); "found, wrong type or span" means a detection overlapped the value but with another type or a different span.`,
   `False positives by type: ${fpTypes.replace(/[{}']/g, "")}.`,
   `Labelled types never found: ${zeroRecall.join(", ") || "none"}.${unlabelledTypes.length ? ` Types detected but not labelled in the ground truth: ${unlabelledTypes.join(", ")}.` : ""}`,
+  relabelled.length && `In sample_addresses.docx, ${relabelled.length} of ${demoAddressNer} address detection(s) ended up as ${relabelled.map(({ e }) => e.placeholder).join(", ")}: the address model's span (confidence ${relabelled.map(({ e }) => e.confidence.toFixed(2)).join(", ")}) overlapped ${relabelled.flatMap(({ by }) => by.map((o) => `a ${o.pii_type} from ${o.detector} (${o.confidence.toFixed(2)})`)).join(", ")}, and redaction names a merged span after its highest-confidence member. The whole merged span is still replaced, so nothing leaks, but the placeholder type is wrong.`,
   `Speed on the machine listed on the title page: ${FILES.map((f) => `${f.filename} ${secs(sum(f.timings))}`).join(", ")}. OCR and the transformer models (GLiNER, TinyBERT, spaCy) take almost all of it; redaction itself takes milliseconds.`,
-];
+].filter(Boolean);
 const warnCodes = (f) => {
   const c = {};
   f.extraction.warnings.forEach((w) => { c[w.code] = (c[w.code] || 0) + 1; });
