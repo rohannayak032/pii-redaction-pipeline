@@ -13,4 +13,11 @@ pillow
 
 # Detection
 spacy
+presidio-analyzer
+gliner
+protobuf          # GLiNER's DeBERTa tokenizer fails to load without it
 faker
+phonenumbers
+transformers      # Indian address NER models (ModernBERT / TinyBERT)
+pandas
+pyarrow           # reads the indian-addresses-gold parquet file
