@@ -1,130 +1,372 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, failedStub, precheck } from "./api";
-import { EvalTab, ExportsTab, FileTab, OverviewTab } from "./tabs";
-import { Alert, DataTable, Metric, Tabs, ThemeSwitch, useTheme } from "./ui";
+import { api, correlateOriginalValues, failedStub, ALLOWED_EXTENSIONS, MAX_FILE_SIZE_MB, precheck } from "./api";
+import { EvalTab, ExportsTab, FileTab, FindingsTab, OverviewTab } from "./tabs";
+import { Alert, Metric, Tabs, ThemeSwitch, useTheme } from "./ui";
 
+// ─── Format file size ─────────────────────────────────────────────────────────
+function fmtSize(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+// ─── File type badge ────────────────────────────────────────────────────────────
+function FileTypeIcon({ type }) {
+  const labels = { pdf: "PDF", docx: "DOCX", pptx: "PPTX", txt: "TXT" };
+  const t = type || "-";
+  return (
+    <span className="file-type-badge">
+      {(labels[t] || t).toUpperCase()}
+    </span>
+  );
+}
+
+// ─── Supported format pill ─────────────────────────────────────────────────────
+function FormatPill({ label, ext }) {
+  return <span className="format-pill" title={ext}>{label}</span>;
+}
+
+// ─── File queue row ────────────────────────────────────────────────────────────
+function FileRow({ f, busy, onRemove }) {
+  return (
+    <div className={`file-row${f.ok ? "" : " file-row--invalid"}`}>
+      <div className="file-row-icon">
+        <FileTypeIcon type={f.type} />
+      </div>
+      <div className="file-row-info">
+        <span className="file-row-name" title={f.file.name}>{f.file.name}</span>
+        <span className="file-row-meta">{fmtSize(f.file.size)}</span>
+      </div>
+      <div className="file-row-status">
+        {f.ok
+          ? <span className="status-ok">Ready</span>
+          : <span className="status-err" title={f.msg}>{f.msg}</span>
+        }
+      </div>
+      <button
+        className="file-row-remove"
+        title="Remove file"
+        disabled={!!busy}
+        onClick={onRemove}
+        aria-label={`Remove ${f.file.name}`}
+      >
+        ✕
+      </button>
+    </div>
+  );
+}
+
+// ─── Drop zone ────────────────────────────────────────────────────────────────
+function DropZone({ over, onDragOver, onDragLeave, onDrop, onBrowse, maxMb }) {
+  return (
+    <div
+      className={`dropzone${over ? " dropzone--active" : ""}`}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+      role="region"
+      aria-label="File upload drop zone"
+    >
+      <div className="dropzone-icon" aria-hidden="true">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M12 15V3M7 8l5-5 5 5" />
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+        </svg>
+      </div>
+      <p className="dropzone-headline">Drag &amp; drop documents here</p>
+      <p className="dropzone-sub">or</p>
+      <button className="btn btn--primary" onClick={onBrowse} type="button">
+        Browse Files
+      </button>
+      <div className="dropzone-formats">
+        <FormatPill label="PDF" ext=".pdf" />
+        <FormatPill label="DOCX" ext=".docx" />
+        <FormatPill label="PPTX" ext=".pptx" />
+        <FormatPill label="TXT" ext=".txt" />
+        <span className="dropzone-limit">· max {maxMb ?? MAX_FILE_SIZE_MB} MB per file</span>
+      </div>
+      <p className="dropzone-privacy">
+        Raw PII values are never stored, logged, or exported
+      </p>
+    </div>
+  );
+}
+
+// ─── Progress bar ─────────────────────────────────────────────────────────────
+function ProgressBar({ busy }) {
+  if (!busy) return null;
+  return (
+    <div className="analysis-progress">
+      <div className="progress-bar">
+        <div className="progress-bar-fill progress-bar-fill--indeterminate" />
+      </div>
+      <p className="progress-label">
+        <span className="progress-badge">{busy.i + 1}/{busy.n}</span>
+        Analysing <strong>{busy.name}</strong>…
+      </p>
+    </div>
+  );
+}
+
+// ─── App ──────────────────────────────────────────────────────────────────────
 export default function App() {
   const [theme, setTheme] = useTheme();
   const [cfg, setCfg] = useState(null);
   const [cfgErr, setCfgErr] = useState("");
-  const [files, setFiles] = useState([]);       // [{file, type, sizeKb, ok, msg}]
+  const [files, setFiles] = useState([]); // [{file, type, sizeKb, ok, msg, ext}]
   const [results, setResults] = useState([]);
+  const [originalValueMaps, setOriginalValueMaps] = useState([]); // per-result correlation maps
   const [runId, setRunId] = useState(null);
-  const [busy, setBusy] = useState(null);       // {i, n, name} while running
+  const [busy, setBusy] = useState(null); // {i, n, name}
   const [over, setOver] = useState(false);
   const [tab, setTab] = useState("Overview");
+  const [dupWarning, setDupWarning] = useState("");
   const inputRef = useRef(null);
   const resultsRef = useRef(null);
 
   useEffect(() => { api.config().then(setCfg).catch((e) => setCfgErr(e.message)); }, []);
 
+  // ── Add files with dedup + validation ───────────────────────────────────────
   const addFiles = useCallback(async (list) => {
-    const checked = await Promise.all([...list].map((f) => precheck(f, cfg)));
-    setFiles((prev) => [...prev, ...checked]);
+    const incoming = [...list];
+    const checked = await Promise.all(incoming.map((f) => precheck(f, cfg)));
+    let dups = 0;
+    setFiles((prev) => {
+      const prevNames = new Set(prev.map((x) => x.file.name));
+      const fresh = checked.filter((c) => {
+        if (prevNames.has(c.file.name)) { dups++; return false; }
+        return true;
+      });
+      if (dups > 0) setDupWarning(`${dups} duplicate file(s) skipped.`);
+      else setDupWarning("");
+      return [...prev, ...fresh];
+    });
   }, [cfg]);
 
+  const removeFile = (idx) => setFiles((prev) => prev.filter((_, i) => i !== idx));
+
+  // ── Run analysis ─────────────────────────────────────────────────────────────
   const run = async () => {
-    if (!files.length || busy) return;
+    const validFiles = files.filter((f) => f.ok);
+    if (!validFiles.length || busy) return;
     if (runId) api.deleteRun(runId);
     setResults([]);
+    setOriginalValueMaps([]);
+    setDupWarning("");
     let id;
-    try { id = (await api.createRun()).run_id; }
-    catch (e) { setCfgErr(`Cannot reach the server: ${e.message}`); return; }
+    try {
+      id = (await api.createRun()).run_id;
+    } catch (e) {
+      setCfgErr(`Cannot reach the server: ${e.message}`);
+      return;
+    }
     setRunId(id);
     const out = [];
-    for (let i = 0; i < files.length; i++) {
-      const f = files[i].file;
-      setBusy({ i, n: files.length, name: f.name });
-      try { out.push(await api.process(id, f)); }
-      catch (e) { out.push(failedStub(f.name, e.message)); }
+    const maps = [];
+    for (let i = 0; i < validFiles.length; i++) {
+      const f = validFiles[i].file;
+      setBusy({ i, n: validFiles.length, name: f.name });
+      try {
+        const res = await api.process(id, f);
+        out.push(res);
+        // Correlate original values securely in-memory
+        const corr = await correlateOriginalValues(f, res);
+        maps.push(corr);
+      } catch (e) {
+        out.push(failedStub(f.name, e.message));
+        maps.push({ filename: f.name, entityMap: new Map(), placeholderMap: new Map(), isClientExtracted: false });
+      }
     }
     setBusy(null);
     setResults(out);
+    setOriginalValueMaps(maps);
     setTab("Overview");
-    setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+    setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 80);
   };
 
+  // ── Clear all ────────────────────────────────────────────────────────────────
   const clearAll = () => {
     if (runId) api.deleteRun(runId);
-    setRunId(null); setResults([]); setFiles([]); setBusy(null); setCfgErr("");
+    setRunId(null);
+    setResults([]);
+    setOriginalValueMaps([]);
+    setFiles([]);
+    setBusy(null);
+    setCfgErr("");
+    setDupWarning("");
   };
 
-  const onDrop = (e) => { e.preventDefault(); setOver(false); if (e.dataTransfer.files.length) addFiles(e.dataTransfer.files); };
+  // ── Drag & drop ──────────────────────────────────────────────────────────────
+  const onDragOver = (e) => { e.preventDefault(); setOver(true); };
+  const onDragLeave = () => setOver(false);
+  const onDrop = (e) => {
+    e.preventDefault();
+    setOver(false);
+    if (e.dataTransfer.files.length) addFiles(e.dataTransfer.files);
+  };
 
   const ok = results.filter((r) => r.status !== "failed");
-  const fileCols = [
-    { key: "name", label: "File", render: (x) => x.file.name, className: "wrap" },
-    { key: "type", label: "Type" },
-    { key: "sizeKb", label: "Size (KB)", className: "num" },
-    { key: "pre", label: "Pre-check", render: (x) => (x.ok ? "✅ OK" : `❌ ${x.msg}`), className: "wrap" },
-    { key: "rm", label: "", render: (x) => (
-      <button className="icon-btn" title="Remove" disabled={!!busy} onClick={() => setFiles(files.filter((y) => y !== x))}>✕</button>) },
-  ];
+  const validFiles = files.filter((f) => f.ok);
+  const invalidFiles = files.filter((f) => !f.ok);
+  const totalPii = results.reduce((a, r) => a + r.entities.length, 0);
+  const clearedCount = results.filter((r) => r.llm_ready).length;
 
   return (
-    <div className="container">
+    <div className="app">
+      {/* ── Navigation ── */}
       <header className="nav">
-        <div className="brand"><div className="logo">🛡</div>PII Shield</div>
-        <ThemeSwitch mode={theme} onChange={setTheme} />
+        <div className="nav-brand">
+          <div className="brand-logo" aria-hidden="true">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+            </svg>
+          </div>
+          <div className="brand-text">
+            <span className="brand-name">PII Shield</span>
+            <span className="brand-tagline">Document Redaction Platform</span>
+          </div>
+        </div>
+        <div className="nav-actions">
+          <ThemeSwitch mode={theme} onChange={setTheme} />
+        </div>
       </header>
 
-      <section className="hero">
-        <h1><span className="hl">PII Shield:</span> Make Documents AI-Safe</h1>
-        <p>Detect, redact and verify personal data before it reaches an LLM</p>
-      </section>
-
-      {cfgErr && <Alert kind="error">{cfgErr}</Alert>}
-
-      <div className={`drop ${over ? "over" : ""}`}
-           onDragOver={(e) => { e.preventDefault(); setOver(true); }} onDragLeave={() => setOver(false)} onDrop={onDrop}>
-        <svg width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-          <path d="M12 16V4M7 9l5-5 5 5" /><path d="M20 16v3a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-3" />
-        </svg>
-        <div className="t">Drag and drop evidence files here</div>
-        <div className="s">PDF, DOCX, PPTX, TXT, PNG, JPG, TIF · up to {cfg?.max_file_mb ?? 25} MB per file</div>
-        <button className="btn primary" style={{ marginTop: 10 }} onClick={() => inputRef.current?.click()}>Browse files</button>
-        <input ref={inputRef} type="file" multiple hidden
-               onChange={(e) => { if (e.target.files.length) addFiles(e.target.files); e.target.value = ""; }} />
-      </div>
-
-      {files.length > 0 && <DataTable columns={fileCols} rows={files} noMax />}
-
-      <div className="actions">
-        <button className="btn primary" disabled={!files.length || !!busy} onClick={run}>{busy ? "Analysing…" : "Run analysis"}</button>
-        <button className="btn" disabled={!!busy} onClick={clearAll}>Clear all</button>
-      </div>
-
-      {busy && (
-        <>
-          <div className="progress indet"><div /></div>
-          <p className="caption" style={{ textAlign: "center" }}>[{busy.i + 1}/{busy.n}] {busy.name}: processing…</p>
-        </>
-      )}
-
-      {!results.length && !busy && (
-        <div className="foot">
-          Up to {cfg?.max_file_mb ?? 25} MB per file · {(cfg?.supported ?? []).join(", ")} · Raw PII values are never shown or exported
-        </div>
-      )}
-
-      {results.length > 0 && (
-        <div ref={resultsRef}>
-          <hr />
-          <h2>Results</h2>
-          <div className="metrics">
-            <Metric label="Files" value={results.length} />
-            <Metric label="Processed" value={ok.length} />
-            <Metric label="Failed" value={results.length - ok.length} />
-            <Metric label="PII entities" value={results.reduce((a, r) => a + r.entities.length, 0)} />
-            <Metric label="Cleared for LLM" value={`${results.filter((r) => r.llm_ready).length}/${results.length}`} />
+      <main className="main">
+        {/* ── Hero ── */}
+        <section className="hero">
+          <h1 className="hero-title">
+            <span className="hero-hl">Detect, Redact &amp; Verify</span>
+            <br />PII Before It Reaches an LLM
+          </h1>
+          <p className="hero-sub">
+            Production-grade privacy protection for enterprise documents
+          </p>
+          <div className="hero-badges">
+            <span className="hero-badge">Zero raw-PII export</span>
+            <span className="hero-badge">Regex + ML detection</span>
+            <span className="hero-badge">Verification pass</span>
           </div>
-          <Tabs tabs={["Overview", "File details", "Evaluation (ground truth)", "Exports"]} value={tab} onChange={setTab} />
-          {tab === "Overview" && <OverviewTab results={results} />}
-          {tab === "File details" && <FileTab results={results} />}
-          {tab === "Evaluation (ground truth)" && <EvalTab runId={runId} results={results} />}
-          {tab === "Exports" && <ExportsTab runId={runId} results={results} />}
+        </section>
+
+        {/* ── Server error ── */}
+        {cfgErr && <Alert kind="error"><strong>Server error:</strong> {cfgErr}</Alert>}
+
+        {/* ── Drop zone ── */}
+        <section className="upload-section">
+          <DropZone
+            over={over}
+            onDragOver={onDragOver}
+            onDragLeave={onDragLeave}
+            onDrop={onDrop}
+            onBrowse={() => inputRef.current?.click()}
+            maxMb={cfg?.max_file_mb}
+          />
+          <input
+            ref={inputRef}
+            type="file"
+            multiple
+            hidden
+            accept=".pdf,.docx,.pptx,.txt"
+            onChange={(e) => { if (e.target.files.length) addFiles(e.target.files); e.target.value = ""; }}
+          />
+        </section>
+
+        {/* ── Dup warning ── */}
+        {dupWarning && <Alert kind="warning">{dupWarning}</Alert>}
+
+        {/* ── File queue ── */}
+        {files.length > 0 && (
+          <section className="file-queue">
+            <div className="file-queue-header">
+              <h3 className="file-queue-title">
+                File Queue
+                <span className="file-queue-count">{files.length} file{files.length !== 1 ? "s" : ""}</span>
+              </h3>
+              {invalidFiles.length > 0 && (
+                <span className="file-queue-warn">
+                  {invalidFiles.length} file{invalidFiles.length !== 1 ? "s" : ""} will be skipped (invalid)
+                </span>
+              )}
+            </div>
+            <div className="file-queue-list">
+              {files.map((f, i) => (
+                <FileRow key={`${f.file.name}-${i}`} f={f} busy={busy} onRemove={() => removeFile(i)} />
+              ))}
+            </div>
+          </section>
+        )}
+
+        {/* ── Action buttons ── */}
+        <div className="actions">
+          <button
+            className="btn btn--primary btn--large"
+            disabled={!validFiles.length || !!busy}
+            onClick={run}
+            title={!validFiles.length ? "Add at least one valid file to begin" : ""}
+          >
+            {busy ? (
+              <><span className="btn-spinner" />Analysing…</>
+            ) : (
+              "Run Analysis"
+            )}
+          </button>
+          <button className="btn btn--ghost" disabled={!!busy} onClick={clearAll}>
+            Clear All
+          </button>
         </div>
-      )}
+
+        {/* ── Progress ── */}
+        <ProgressBar busy={busy} />
+
+        {/* ── Footer hint (pre-results) ── */}
+        {!results.length && !busy && (
+          <div className="upload-footer">
+            Supported formats: {ALLOWED_EXTENSIONS.join(", ")} &nbsp;·&nbsp;
+            Max {cfg?.max_file_mb ?? MAX_FILE_SIZE_MB} MB per file &nbsp;·&nbsp;
+            Raw PII values never leave the server
+          </div>
+        )}
+
+        {/* ── Results dashboard ── */}
+        {results.length > 0 && (
+          <section className="results-section" ref={resultsRef}>
+            <div className="results-header">
+              <h2 className="results-title">Analysis Results</h2>
+              <div className="results-run-id">
+                Run ID: <code>{runId?.slice(0, 12)}…</code>
+              </div>
+            </div>
+
+            {/* Summary metric cards */}
+            <div className="metrics-grid">
+              <Metric label="Files Processed" value={`${ok.length}/${results.length}`} />
+              <Metric label="PII Entities Found" value={totalPii} accent={totalPii > 0} />
+              <Metric label="Entities Redacted" value={ok.reduce((a, r) => a + r.entities.length, 0)} />
+              <Metric label="Cleared for LLM" value={`${clearedCount}/${results.length}`} accent={clearedCount === results.length && results.length > 0} />
+              {results.some((r) => r.leaks?.length > 0) && (
+                <Metric label="Possible Leaks" value={results.reduce((a, r) => a + (r.leaks?.length || 0), 0)} />
+              )}
+            </div>
+
+            {/* Tab navigation */}
+            <Tabs
+              tabs={["Overview", "Findings", "File Details", "Evaluation", "Exports"]}
+              value={tab}
+              onChange={setTab}
+            />
+
+            <div className="tab-panel">
+              {tab === "Overview" && <OverviewTab results={results} />}
+              {tab === "Findings" && <FindingsTab results={results} originalValueMaps={originalValueMaps} />}
+              {tab === "File Details" && <FileTab results={results} originalValueMaps={originalValueMaps} />}
+              {tab === "Evaluation" && <EvalTab runId={runId} results={results} />}
+              {tab === "Exports" && <ExportsTab runId={runId} results={results} />}
+            </div>
+          </section>
+        )}
+      </main>
     </div>
   );
 }
+
+
