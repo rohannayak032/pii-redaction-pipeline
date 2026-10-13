@@ -348,7 +348,7 @@ export default function App() {
               {tab === "Overview" && <OverviewTab results={results} />}
               {tab === "Findings" && <FindingsTab results={results} />}
               {tab === "File Details" && <FileTab runId={runId} results={results} />}
-              {tab === "Evaluation" && <EvalTab runId={runId} results={results} />}
+              {tab === "Evaluation" && <EvalTab runId={runId} results={results} cfg={cfg} />}
               {tab === "Exports" && <ExportsTab runId={runId} results={results} />}
             </div>
           </section>
