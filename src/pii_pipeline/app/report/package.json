@@ -1,0 +1,14 @@
+{
+  "name": "pii-shield-report",
+  "private": true,
+  "description": "Runs the samples through the PII Shield UI, takes screenshots and builds data/outputs/PII_Shield_Report.docx",
+  "scripts": {
+    "capture": "node capture.js",
+    "build": "node build_report.js",
+    "all": "node capture.js && node build_report.js"
+  },
+  "devDependencies": {
+    "docx": "9.5.1",
+    "puppeteer-core": "23.11.1"
+  }
+}

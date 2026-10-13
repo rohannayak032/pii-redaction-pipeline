@@ -35,6 +35,16 @@ Upload a ground-truth CSV with columns `file, case_id, type, value, location, st
 (e.g. `src/pii_pipeline/evaluation/ground_truth_cadence_updated_with_addresses.csv`).
 Rows are matched to processed files by the `file` column, so upload the documents under the same names.
 
+## Demo report (screenshots + Word document)
+With the server running and `data/sample.pdf`, `sample.docx`, `sample.pptx` in place:
+```
+cd src/pii_pipeline/app/report && npm install && npm run all
+```
+`capture.js` drives the UI in headless Chrome (`CHROME_PATH` to override the browser), runs the evaluation and
+saves screenshots, API responses and exports to `data/outputs/`. `build_report.js` writes
+`data/outputs/PII_Shield_Report.docx`; every number in it is read from those saved responses.
+`data/` is git-ignored, so the outputs stay on your machine.
+
 ## Privacy
 Raw PII and original block text never leave the server process and are never in any API response or export.
 Results are held in memory per run (max 20) so exports and evaluation work; **Clear all** deletes the run.
