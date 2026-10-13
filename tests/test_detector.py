@@ -191,6 +191,7 @@ def test_model_address_across_an_id_is_dropped(monkeypatch):
     ("Ananya V. Chatterjee Divisional RC 15/08/2026", ["Ananya V. Chatterjee"]),
     ("PRIYA NAIR", ["PRIYA NAIR"]),
     ("Siddharth Gaikwad, Srinivas Teppa", ["Siddharth Gaikwad", "Srinivas Teppa"]),
+    ("Setup CD_Onboarding - Workflow - Siddharth Gaikwad", ["Siddharth Gaikwad"]),
     ("Chris Ott Melisa Cardozo DK Koran Erik Hansen",
      ["Chris Ott", "Melisa Cardozo", "DK Koran", "Erik Hansen"]),
     ("Lars Erik Brannstrom", ["Lars Erik Brannstrom"]),

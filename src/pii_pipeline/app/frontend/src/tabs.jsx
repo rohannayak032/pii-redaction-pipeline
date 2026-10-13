@@ -44,6 +44,9 @@ function EntityDetail({ entity }) {
     ["Location", entity.location || "-"],
     ["Char start", entity.start],
     ["Char end", entity.end],
+    ...(entity.count > 1
+      ? [["Occurrences", entity.count], ["All offsets", entity.spans.map(([s, t]) => `${s}–${t}`).join(", ")]]
+      : []),
   ];
   return (
     <div className="entity-detail">
@@ -139,6 +142,24 @@ export function OverviewTab({ results }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // FINDINGS TAB — searchable, filterable cross-file detections
 // ─────────────────────────────────────────────────────────────────────────────
+// One row per value at a location: a screenshot listing a name on every line is one finding with a count.
+function groupFindings(rows) {
+  const groups = new Map();
+  rows.forEach((e) => {
+    const key = JSON.stringify([e.file, e.block_index, e.pii_type, e.value, e.placeholder]);
+    const g = groups.get(key);
+    if (!g) {
+      groups.set(key, { ...e, count: 1, detectors: [e.detector], spans: [[e.start, e.end]] });
+      return;
+    }
+    g.count += 1;
+    g.spans.push([e.start, e.end]);
+    if (!g.detectors.includes(e.detector)) g.detectors.push(e.detector);
+    if (e.confidence != null && (g.confidence == null || e.confidence > g.confidence)) g.confidence = e.confidence;
+  });
+  return [...groups.values()].map((g, i) => ({ ...g, n: i + 1, detector: g.detectors.join(", ") }));
+}
+
 function DetectionsTable({ rows, showFile }) {
   const [search, setSearch] = useState("");
   const [types, setTypes] = useState([]);
@@ -154,12 +175,14 @@ function DetectionsTable({ rows, showFile }) {
     (!files.length || files.includes(e.file)) &&
     (!pages.length || pages.includes(e.page)) &&
     (!q || [e.pii_type, e.value, e.placeholder, e.file, e.location, e.detector].some((v) => (v || "").toLowerCase().includes(q))));
+  const findings = groupFindings(filtered);
 
   const cols = [
     { key: "n", label: "#", className: "num" },
     { key: "pii_type", label: "PII Type" },
     { key: "value", label: "Value", className: "wrap" },
     { key: "placeholder", label: "Placeholder", className: "nowrap", render: (e) => <code>{e.placeholder || "-"}</code> },
+    { key: "count", label: "Count", className: "num", render: (e) => `×${e.count}` },
     { key: "confidence", label: "Confidence", className: "num", render: (e) => conf(e.confidence) },
     { key: "detector", label: "Detector" },
     ...(showFile ? [{ key: "file", label: "File", className: "wrap" }] : []),
@@ -179,10 +202,11 @@ function DetectionsTable({ rows, showFile }) {
             : <MultiSelect label="Page" options={options("page")} value={pages} onChange={setPages} />}
         </div>
       </div>
-      <DataTable columns={cols} rows={filtered} expandRow={(e) => <EntityDetail entity={e} />}
+      <DataTable columns={cols} rows={findings} expandRow={(e) => <EntityDetail entity={e} />}
         empty="No detections match the current filters." />
       <p className="findings-footer">
-        {filtered.length} of {rows.length} detections shown · values are shown here only; exports never contain them
+        {findings.length} findings ({filtered.length} of {rows.length} detections; repeats of a value at one location
+        are grouped) · values are shown here only; exports never contain them
       </p>
     </>
   );

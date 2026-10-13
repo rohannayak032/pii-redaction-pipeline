@@ -113,6 +113,7 @@ def _is_junk(token: str, mixed_case: bool, last: bool = False) -> bool:
     return (
         not any(c.isalpha() for c in word)        # "|", "-"
         or any(c.isdigit() for c in word)         # "EMP-38104", "30/09/2026"
+        or "_" in word                            # "CD_Onboarding": an identifier
         or word[0].islower()                      # "gap,", "internal"
         or word.lower() in _NOT_NAME
         or (word.lower() in _FUNCTION_WORDS and not _INITIAL.fullmatch(token))  # not "A."
@@ -174,9 +175,15 @@ def _clean_person(entity: Entity, text: str) -> list[Entity]:
 
     # A new initial after a finished name starts another name:
     # "D. R. Okonjo A. V. Chatterjee", but not "Naomi K. Osadebe".
-    # A separator ends one: "Siddharth Gaikwad, Srinivas Teppa".
+    # A separator ends one: "Siddharth Gaikwad, Srinivas Teppa",
+    # "Workflow - Siddharth Gaikwad" (a spaced dash; "Caira-Ruiz" is one token).
     segments, current = [], []
     for token in tokens:
+        if token[2] in ("-", "–", "—"):
+            if current:
+                segments.append(current)
+                current = []
+            continue
         if current and (
             current[-1][2][-1] in ",;|"
             or (
