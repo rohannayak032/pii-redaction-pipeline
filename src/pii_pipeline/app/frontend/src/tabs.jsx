@@ -86,7 +86,7 @@ export function OverviewTab({ results }) {
     { key: "status", label: "Status", render: (r) => <StatusBadge status={r.status} /> },
     { key: "pages", label: "Pages", render: (r) => r.pages.length, className: "num" },
     { key: "block_count", label: "Blocks", className: "num" },
-    { key: "det", label: "Unique PII", render: (r) => groupFindings(r.entities).length, className: "num" },
+    { key: "det", label: "Detections", render: (r) => r.entities.length, className: "num" },
     { key: "red", label: "Redactions", render: (r) => r.records.length, className: "num" },
     { key: "cats", label: "Redactions by type", className: "wrap",
       render: (r) => Object.entries(r.report.summary.by_pii_type).map(([k, v]) => `${k} ×${v}`).join(", ") || "—" },
@@ -142,7 +142,7 @@ export function OverviewTab({ results }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // One row per unique PII value in a file: a name repeated across paragraphs, tables and OCR'd images
 // (and found by several detectors) is one finding with a count and every location.
-export function groupFindings(rows) {
+function groupFindings(rows) {
   const groups = new Map();
   rows.forEach((e) => {
     const key = JSON.stringify([e.file, e.pii_type, e.value, e.placeholder]);
@@ -442,8 +442,7 @@ export function FileTab({ runId, results }) {
 
           <div className="metrics-grid metrics-grid--compact">
             <Metric label="Blocks" value={r.block_count} />
-            <Metric label="Unique PII" value={groupFindings(r.entities).length} accent={r.entities.length > 0}
-              help={`${r.entities.length} detections in total, repeats included`} />
+            <Metric label="Detections" value={r.entities.length} accent={r.entities.length > 0} />
             <Metric label="Redactions" value={r.records.length} />
             <Metric label="Placeholders" value={r.placeholders.length} />
             <Metric label="Residual leaks" value={r.leaks.length} />
