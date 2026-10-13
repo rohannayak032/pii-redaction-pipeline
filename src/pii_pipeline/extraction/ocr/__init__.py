@@ -104,6 +104,12 @@ def ocr_image(
         return out
 
     out.rotation = engine.detect_orientation(gray)
+    if out.rotation:
+        # OSD often reports 180 for upright UI screenshots; keep its turn only if OCR reads at least as well.
+        turned = preprocessing.rotate_quadrant(gray, out.rotation)
+        if engine.score(engine.ocr_words(preprocessing.binarize(turned))) < engine.score(
+                engine.ocr_words(preprocessing.binarize(gray))):
+            out.rotation = 0
     gray = preprocessing.rotate_quadrant(gray, out.rotation)
     out.skew = preprocessing.skew_angle(gray)
     gray = preprocessing.deskew(gray, out.skew)

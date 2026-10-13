@@ -59,7 +59,10 @@ def skew_angle(gray: np.ndarray) -> float:
     scale = 1000.0 / max(gray.shape)
     if scale < 1.0:
         small = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
-    ink = (binarize(small) == 0).astype(np.float32)
+    ink = (binarize(small) == 0).astype(np.uint8)
+    # Drop solid fills (dark UI sidebars, banners): rotating a large block inflates the
+    # profile variance and made every screenshot look skewed by the full search range.
+    ink = (ink & (1 - cv2.morphologyEx(ink, cv2.MORPH_OPEN, np.ones((9, 9), np.uint8)))).astype(np.float32)
     if ink.sum() < 50:
         return 0.0
 
