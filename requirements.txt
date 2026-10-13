@@ -4,12 +4,15 @@
 # Everyone
 pytest
 
-# Extraction
-python-docx
-python-pptx
-pymupdf
+# Extraction (also needs the Tesseract OCR program: see src/pii_pipeline/extraction/README.md)
+python-docx>=1.2
+python-pptx>=1.0
+pymupdf>=1.24
 pytesseract
 pillow
+opencv-python-headless
+numpy
+lxml
 
 # Detection
 spacy
